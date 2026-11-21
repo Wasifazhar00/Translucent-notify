@@ -2,19 +2,21 @@
 
 Native Android experiment for OnePlus 11R / OxygenOS 16.
 
-## Intended effect
-Only a full-screen neutral-grey frosted/translucent background while the original System UI notification shade or Quick Settings pages are open. Original clock, icons, notifications, tiles, gestures and navigation remain System UI-owned. No app-created panel or notification content.
+## Accessibility setup (Android 13+)
+1. Open Shade Background.
+2. Tap **Step 1 — Open app info**.
+3. If Android blocks the service, open the top-right three-dot menu and select **Allow restricted settings**. Android may show this option for sideloaded apps.
+4. Return to the app and tap **Step 2 — Open accessibility settings**.
+5. Find Shade Background under installed/downloaded services, enable it, and accept Android's confirmation.
+6. Return to the app; it checks whether the service is enabled.
 
-## Approach
-- AccessibilityService detects System UI shade window metadata.
-- A non-touchable TYPE_ACCESSIBILITY_OVERLAY is used as a background layer.
-- AOSP window type ordering places accessibility overlays below TYPE_NOTIFICATION_SHADE.
-- Grey translucent fill and cross-window blur are used where supported.
-- Layer is removed when shade closes.
-- No notification listener, root, Shizuku, ADB, or draw-over-other-apps permission.
+Android intentionally requires the user to approve restricted settings and Accessibility. An app cannot silently grant itself these privileges or bypass the confirmation.
 
-## Important limitation
-This is an experiment, not a guaranteed System UI modification. The effect is visible only if OxygenOS renders the notification-shade surface translucently. If the shade is fully opaque, an ordinary app cannot change that System UI surface. OxygenOS may also use different accessibility window class names; detection must be tested on the actual device. The service does not inspect or store notification text.
+## Privacy
+The service uses Accessibility window metadata to detect the System UI shade. It does not request Notification Listener access and does not read or store notification text.
+
+## Intended effect and limitation
+Only a grey frosted/translucent background layer is attempted behind the original notification shade and Quick Settings. The original System UI owns all icons, notifications, tiles and gestures. The layer uses a non-touchable TYPE_ACCESSIBILITY_OVERLAY and supported blur APIs. Visibility depends on OxygenOS shade window layering and whether the shade surface is translucent. An opaque System UI shade cannot be made transparent by an ordinary app.
 
 ## Build
 Manually run **Actions → Build APK → Run workflow**.

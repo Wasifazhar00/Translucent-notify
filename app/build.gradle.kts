@@ -9,8 +9,8 @@ android {
         applicationId = "com.wasif.translucentnotify"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.0.0"
+        versionCode = 4
+        versionName = "2.1.0"
     }
     buildTypes {
         release {
@@ -24,5 +24,4 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
-dependencies {
-}
+dependencies {}
