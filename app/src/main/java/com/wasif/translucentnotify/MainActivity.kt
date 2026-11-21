@@ -95,6 +95,7 @@ class MainActivity : Activity() {
         page.addView(apply, margin(-1, 22, 8))
         permission = button("Grant Shizuku permission") { requestShizukuPermission() }
         page.addView(permission, margin(-1, 4, 8))
+        page.addView(button("Reset to system default") { writeProperty(-1, "System default saved. It may take effect after System UI/device restart.") }, margin(-1, 4, 8))
         page.addView(button("Check compatibility again") { refreshStatus() }, margin(-1, 4, 8))
 
         page.addView(text("How it works", 18, Color.WHITE, true).also { it.setPadding(0, dp(26), 0, dp(8)) })
@@ -118,7 +119,7 @@ class MainActivity : Activity() {
             recognized && granted -> "Compatible ColorOS 17 detected • Shizuku authorized"
             recognized && shizukuRunning -> "ColorOS 17 detected • Shizuku permission required"
             recognized -> "ColorOS 17 detected • Start Shizuku first"
-            else -> "Unsupported system build • $manufacturerModel()"
+            else -> "Unsupported system build • ${manufacturerModel()}"
         }
         val supported = recognized
         slider.isEnabled = supported
@@ -147,6 +148,10 @@ class MainActivity : Activity() {
     }
 
     private fun applySelected() {
+        writeProperty(levels[selected], "Saved. It may take effect after System UI/device restart.")
+    }
+
+    private fun writeProperty(value: Int, successMessage: String) {
         val colorOs = readProp("ro.build.version.oplusrom.display").ifBlank {
             readProp("ro.build.version.oplusrom")
         }
@@ -160,9 +165,9 @@ class MainActivity : Activity() {
             refreshStatus()
             return
         }
-        val command = "setprop $property ${levels[selected]}"
         Thread {
             val result = runCatching {
+                val command = "setprop $property $value"
                 val method = Shizuku::class.java.getDeclaredMethod(
                     "newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java
                 )
@@ -171,7 +176,7 @@ class MainActivity : Activity() {
                 process.waitFor()
             }.getOrElse { -1 }
             runOnUiThread {
-                if (result == 0) toast("Saved. It may take effect after System UI/device restart.")
+                if (result == 0) toast(successMessage)
                 else toast("Could not apply. Check Shizuku and its version.")
             }
         }.start()
