@@ -10,18 +10,15 @@ import android.graphics.PixelFormat
 import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.Shader
+import android.os.Build
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 
 /**
- * Smart translucent overlay tuned for OnePlus 11R / OxygenOS QS layout.
- *
- * Uses the standard application-overlay layer rather than an accessibility
- * overlay. Android places application overlays below critical system windows;
- * this is intended to let the native notification shade render above the tint.
- * The exact shade ordering remains OEM-dependent and must be verified on-device.
+ * Adds a non-interactive tint layer while the native notification shade is detected.
+ * The layer does not read notification content or handle touch input.
  */
 class PanelAccessibilityService : AccessibilityService() {
 
@@ -78,21 +75,15 @@ class PanelAccessibilityService : AccessibilityService() {
             windows.any { window ->
                 val bounds = Rect()
                 window.getBoundsInScreen(bounds)
-
                 if (bounds.width() < screenWidth * 0.55f ||
                     bounds.height() < screenHeight * 0.15f ||
                     bounds.top > screenHeight * 0.18f
-                ) {
-                    return@any false
-                }
+                ) return@any false
 
                 val root = window.root
                 val packageName = root?.packageName?.toString()
-                val identifiedByPackage = packageName == systemUiPackage
-                val identifiedByName =
+                packageName == systemUiPackage ||
                     matches(root?.className) || matches(window.title)
-
-                identifiedByPackage || identifiedByName
             }
         }.getOrDefault(false)
     }
@@ -102,10 +93,15 @@ class PanelAccessibilityService : AccessibilityService() {
         val manager = wm ?: return
 
         val tintPercent = Prefs.tintPercent(this).coerceIn(0, 100)
-        // Keep a clearly visible grey wash through the transparent native panel.
-        // The native SystemUI content is in a higher window layer and remains
-        // interactive; this view itself never receives touch or focus.
         val maxAlpha = (tintPercent * 180 / 100).coerceIn(0, 180)
+        val tintRgb = when (Prefs.tintColor(this)) {
+            0 -> intArrayOf(158, 158, 166) // soft grey
+            1 -> intArrayOf(43, 46, 54)    // charcoal
+            2 -> intArrayOf(12, 14, 19)    // deep black
+            else -> intArrayOf(43, 55, 72) // blue-grey
+        }
+        val blurEnabled = Prefs.blurEnabled(this) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        val blurRadiusPx = (Prefs.blurDp(this) * resources.displayMetrics.density).toInt()
 
         val view = object : View(this) {
             private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -114,48 +110,46 @@ class PanelAccessibilityService : AccessibilityService() {
                 super.onDraw(canvas)
                 val w = width.toFloat()
                 val h = height.toFloat()
-                if (w <= 0f || h <= 0f) return
+                if (w <= 0f || h <= 0f || maxAlpha <= 0) return
 
-                // Main content area on OnePlus 11R QS is roughly:
-                // from ~12% to ~78% of screen height, centered horizontally
                 val centerX = w / 2f
                 val centerY = h * 0.46f
                 val radius = maxOf(w, h) * 0.68f
-
-                // Keep the centre visibly tinted too; the native panel content
-                // (icons, notifications, QS tiles and menus) draws above this layer.
+                val r = tintRgb[0]
+                val g = tintRgb[1]
+                val b = tintRgb[2]
                 val colors = intArrayOf(
-                    Color.argb((maxAlpha * 0.58f).toInt(), 172, 172, 180),
-                    Color.argb((maxAlpha * 0.70f).toInt(), 168, 168, 176),
-                    Color.argb((maxAlpha * 0.86f).toInt(), 164, 164, 172),
-                    Color.argb(maxAlpha, 158, 158, 166)
+                    Color.argb((maxAlpha * 0.48f).toInt(), r, g, b),
+                    Color.argb((maxAlpha * 0.68f).toInt(), r, g, b),
+                    Color.argb((maxAlpha * 0.86f).toInt(), r, g, b),
+                    Color.argb(maxAlpha, r, g, b)
                 )
                 val stops = floatArrayOf(0.0f, 0.48f, 0.78f, 1.0f)
 
                 paint.shader = RadialGradient(
-                    centerX, centerY, radius,
-                    colors, stops, Shader.TileMode.CLAMP
+                    centerX, centerY, radius, colors, stops, Shader.TileMode.CLAMP
                 )
                 canvas.drawRect(0f, 0f, w, h, paint)
+                paint.shader = null
 
-                // Soft top strip (status bar area) - slightly stronger
-                val topPaint = Paint()
-                topPaint.shader = LinearGradient(
-                    0f, 0f, 0f, h * 0.11f,
-                    Color.argb((maxAlpha * 0.55f).toInt(), 155, 155, 160),
-                    Color.TRANSPARENT,
-                    Shader.TileMode.CLAMP
-                )
+                val topPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    shader = LinearGradient(
+                        0f, 0f, 0f, h * 0.13f,
+                        Color.argb((maxAlpha * 0.35f).toInt(), r, g, b),
+                        Color.TRANSPARENT,
+                        Shader.TileMode.CLAMP
+                    )
+                }
                 canvas.drawRect(0f, 0f, w, h * 0.13f, topPaint)
 
-                // Soft bottom fade
-                val bottomPaint = Paint()
-                bottomPaint.shader = LinearGradient(
-                    0f, h * 0.88f, 0f, h,
-                    Color.TRANSPARENT,
-                    Color.argb((maxAlpha * 0.45f).toInt(), 155, 155, 160),
-                    Shader.TileMode.CLAMP
-                )
+                val bottomPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    shader = LinearGradient(
+                        0f, h * 0.88f, 0f, h,
+                        Color.TRANSPARENT,
+                        Color.argb((maxAlpha * 0.30f).toInt(), r, g, b),
+                        Shader.TileMode.CLAMP
+                    )
+                }
                 canvas.drawRect(0f, h * 0.88f, w, h, bottomPaint)
             }
         }.apply {
@@ -165,10 +159,16 @@ class PanelAccessibilityService : AccessibilityService() {
             isFocusableInTouchMode = false
         }
 
-        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        var flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+
+        // Blur-behind is deliberately opt-in: it blurs whatever is underneath
+        // this overlay, which may include notification text/icons on this OEM.
+        if (blurEnabled && blurRadiusPx > 0) {
+            flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+        }
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -179,6 +179,9 @@ class PanelAccessibilityService : AccessibilityService() {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             alpha = 1f
+            if (blurEnabled && blurRadiusPx > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                setBlurBehindRadius(blurRadiusPx)
+            }
         }
 
         runCatching {
