@@ -1,2 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources><string name="a11y_description">Detects when the system notification shade is open and shows a background-only translucent layer underneath it. Does not read or store notification text.</string></resources>
+<resources>
+    <string name="accessibility_service_label">Shade Background</string>
+    <string name="a11y_description">Detects when the system notification shade is open and shows a background-only translucent layer underneath it. Does not read or store notification text.</string>
+</resources>

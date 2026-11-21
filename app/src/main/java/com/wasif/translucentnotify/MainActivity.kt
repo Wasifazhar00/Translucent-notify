@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
@@ -39,33 +40,34 @@ class MainActivity : Activity() {
             14,0xFFD0D0D5.toInt(),false
         ).apply { setPadding(0,dp(10),0,dp(20)) })
 
-        page.addView(label("Accessibility permission",18,Color.WHITE,true))
+        page.addView(label("Accessibility service",18,Color.WHITE,true))
         permissionStatus = label("",14,0xFFFFD59A.toInt(),true)
         page.addView(permissionStatus.apply { setPadding(0,dp(8),0,dp(12)) })
 
         page.addView(Button(this).apply {
-            text = "Step 1 — Open app info"; isAllCaps = false
-            setOnClickListener { openAppInfo() }
+            text = "Open this app's accessibility settings"
+            isAllCaps = false
+            setOnClickListener { openServiceSettings() }
         })
         page.addView(label(
-            "If Android blocks the service, open the three-dot menu on the App info screen " +
-                "and choose Allow restricted settings. This option may appear only for apps installed outside an app store.",
-            13,0xFFD0D0D5.toInt(),false
-        ).apply { setPadding(0,dp(8),0,dp(12)) })
-
-        page.addView(Button(this).apply {
-            text = "Step 2 — Open accessibility settings"; isAllCaps = false
-            setOnClickListener {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-        })
-        page.addView(label(
-            "Find Shade Background under downloaded/installed services and switch it on. " +
-                "Android will show its standard confirmation dialog. Return here afterward to verify the status.",
+            "If Android shows a Restricted setting warning, first open App info, use its three-dot menu " +
+                "to allow restricted settings if that option is available, then return here and open this service again. " +
+                "If the option is absent, install the latest APK normally from the downloaded file and retry. " +
+                "Android requires you to approve the service manually.",
             13,0xFFD0D0D5.toInt(),false
         ).apply { setPadding(0,dp(8),0,dp(18)) })
 
-        page.addView(label("Grey tint",16,Color.WHITE,true).apply { setPadding(0,dp(8),0,0) })
+        page.addView(Button(this).apply {
+            text = "Open app info"
+            isAllCaps = false
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", packageName, null)
+                })
+            }
+        })
+
+        page.addView(label("Grey tint",16,Color.WHITE,true).apply { setPadding(0,dp(22),0,0) })
         tintLabel = label("",14,0xFFD0D0D5.toInt(),false)
         page.addView(tintLabel)
         page.addView(SeekBar(this).apply {
@@ -100,8 +102,9 @@ class MainActivity : Activity() {
         })
 
         page.addView(label(
-            "Android does not let an app silently enable its own Accessibility Service or bypass Restricted settings. " +
-                "The two steps above must be completed by you.",
+            "No notification-listener or draw-over-other-apps permission is needed. " +
+                "If this service does not appear in Android's installed accessibility services list, " +
+                "the installed APK is not the updated build or Android did not register its service declaration.",
             12,0xFFFFD59A.toInt(),false
         ).apply { setPadding(0,dp(22),0,0) })
     }
@@ -109,6 +112,20 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::permissionStatus.isInitialized) refreshPermissionStatus()
+    }
+
+    private fun openServiceSettings() {
+        val component = ComponentName(this, PanelAccessibilityService::class.java)
+        if (Build.VERSION.SDK_INT >= 33) {
+            val detail = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
+                putExtra(Settings.EXTRA_ACCESSIBILITY_SERVICE_COMPONENT_NAME, component)
+            }
+            try {
+                startActivity(detail)
+                return
+            } catch (_: Exception) { }
+        }
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
     private fun refreshPermissionStatus() {
@@ -122,20 +139,13 @@ class MainActivity : Activity() {
             }
         }
         permissionStatus.text = if (enabled) {
-            "Enabled — Accessibility Service is active."
+            "Enabled — service is active."
         } else {
-            "Not enabled. Complete Step 1 if restricted, then Step 2."
+            "Disabled — tap the button above to open its settings."
         }
         permissionStatus.setTextColor(
             if (enabled) 0xFF8FE3A0.toInt() else 0xFFFFD59A.toInt()
         )
-    }
-
-    private fun openAppInfo() {
-        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.fromParts("package", packageName, null)
-        }
-        startActivity(intent)
     }
 
     private fun label(text:String,size:Int,color:Int,bold:Boolean) = TextView(this).apply {
