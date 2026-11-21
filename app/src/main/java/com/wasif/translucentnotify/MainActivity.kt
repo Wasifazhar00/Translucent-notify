@@ -28,6 +28,7 @@ class MainActivity : Activity() {
     private lateinit var slider: SeekBar
     private lateinit var apply: Button
     private lateinit var permission: Button
+    private lateinit var reset: Button
 
     private val permissionListener = Shizuku.OnRequestPermissionResultListener { code, _ ->
         if (code == requestCode) runOnUiThread { refreshStatus() }
@@ -43,7 +44,7 @@ class MainActivity : Activity() {
         refreshStatus()
     }
 
-    override fun onDestroy() {
+    override fun onResume() {\n        super.onResume()\n        if (::status.isInitialized) refreshStatus()\n    }\n\n    override fun onDestroy() {
         Shizuku.removeRequestPermissionResultListener(permissionListener)
         super.onDestroy()
     }
@@ -95,7 +96,8 @@ class MainActivity : Activity() {
         page.addView(apply, margin(-1, 22, 8))
         permission = button("Grant Shizuku permission") { requestShizukuPermission() }
         page.addView(permission, margin(-1, 4, 8))
-        page.addView(button("Reset to system default") { writeProperty(-1, "System default saved. It may take effect after System UI/device restart.") }, margin(-1, 4, 8))
+        reset = button("Reset to system default") { writeProperty(-1, "System default saved. It may take effect after System UI/device restart.") }
+        page.addView(reset, margin(-1, 4, 8))
         page.addView(button("Check compatibility again") { refreshStatus() }, margin(-1, 4, 8))
 
         page.addView(text("How it works", 18, Color.WHITE, true).also { it.setPadding(0, dp(26), 0, dp(8)) })
