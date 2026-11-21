@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -12,9 +13,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 
 /**
- * Background-only accessibility layer. It does not intercept touch or read
- * notification contents. Activation requires an explicitly named shade/QS
- * window from System UI; generic touch/content events are not sufficient.
+ * Adds a non-interactive tint below the native System UI shade.
+ * Accessibility is used only to detect an explicitly identified shade/QS window.
+ * Notification text and other window content are never inspected or stored.
  */
 class PanelAccessibilityService : AccessibilityService() {
     private var wm: WindowManager? = null
@@ -44,8 +45,7 @@ class PanelAccessibilityService : AccessibilityService() {
     }
 
     private fun refreshShadeState(event: AccessibilityEvent? = null) {
-        val open = isShadeOpen(event)
-        if (open) showLayer() else hideLayer()
+        if (isShadeOpen(event)) showLayer() else hideLayer()
     }
 
     private fun isShadeOpen(event: AccessibilityEvent? = null): Boolean {
@@ -60,8 +60,8 @@ class PanelAccessibilityService : AccessibilityService() {
             return name.isNotEmpty() && tokens.any(name::contains)
         }
 
-        // Only explicit shade/QS identifiers qualify. No screen-size heuristics,
-        // generic SystemUI events, status-bar names, or touch events.
+        // A shade-specific event is a positive signal. Otherwise inspect visible
+        // accessibility windows; never infer shade state from generic touch events.
         if (event?.packageName?.toString() == systemUi && matches(event.className)) {
             return true
         }
@@ -76,6 +76,7 @@ class PanelAccessibilityService : AccessibilityService() {
 
     private fun showLayer() {
         if (layer != null) return
+        if (!Settings.canDrawOverlays(this)) return
         val manager = wm ?: return
         val tint = Prefs.tintPercent(this).coerceIn(0, 100)
         val view = FrameLayout(this).apply {
@@ -87,12 +88,11 @@ class PanelAccessibilityService : AccessibilityService() {
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
             WindowManager.LayoutParams.FLAG_BLUR_BEHIND
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             flags,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -101,7 +101,7 @@ class PanelAccessibilityService : AccessibilityService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 setBlurBehindRadius(
                     (Prefs.blurDp(this@PanelAccessibilityService) *
-                        resources.displayMetrics.density).toInt().coerceAtLeast(0)
+                        resources.displayMetrics.density).toInt().coerceIn(0, 80 * resources.displayMetrics.density.toInt().coerceAtLeast(1))
                 )
             }
         }
