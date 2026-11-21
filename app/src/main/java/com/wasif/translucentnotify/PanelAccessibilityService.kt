@@ -10,21 +10,18 @@ import android.graphics.PixelFormat
 import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.Shader
-import android.os.Build
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 
 /**
- * Smart translucent overlay for the notification shade.
+ * Smart translucent overlay tuned for OnePlus 11R / OxygenOS QS layout.
  *
- * Platform limitation: the overlay always sits ON TOP of the SystemUI shade.
- * To reduce the impact on icons and tiles we use a non-uniform tint:
- * - Stronger on the outer edges
- * - Lighter / more transparent in the center (where notifications + QS live)
- *
- * This is not perfect hole-punching, but it keeps the main content more readable.
+ * The overlay is forced to stay on top (platform limitation).
+ * To keep icons and tiles readable we use a carefully shaped gradient:
+ * - Very light in the main content area (tiles + icons)
+ * - Stronger only on the outer edges and empty spaces
  */
 class PanelAccessibilityService : AccessibilityService() {
 
@@ -105,9 +102,9 @@ class PanelAccessibilityService : AccessibilityService() {
         val manager = wm ?: return
 
         val tintPercent = Prefs.tintPercent(this).coerceIn(0, 100)
-        val maxAlpha = (tintPercent * 255 / 100).coerceIn(0, 220)
+        // Keep overall strength moderate so center can stay readable
+        val maxAlpha = (tintPercent * 180 / 100).coerceIn(0, 160)
 
-        // Custom view that draws a soft center (lighter) and stronger edges
         val view = object : View(this) {
             private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
@@ -117,18 +114,21 @@ class PanelAccessibilityService : AccessibilityService() {
                 val h = height.toFloat()
                 if (w <= 0f || h <= 0f) return
 
-                // Radial gradient: transparent-ish in center, stronger toward edges
-                // This keeps the main notification + QS area more readable
+                // Main content area on OnePlus 11R QS is roughly:
+                // from ~12% to ~78% of screen height, centered horizontally
                 val centerX = w / 2f
-                val centerY = h * 0.42f          // slightly above center (QS + notifications)
-                val radius = maxOf(w, h) * 0.75f
+                val centerY = h * 0.46f
+                val radius = maxOf(w, h) * 0.68f
 
+                // Very light in the middle (where all the tiles live)
+                // Stronger only near the edges
                 val colors = intArrayOf(
-                    Color.argb((maxAlpha * 0.25f).toInt(), 175, 175, 180), // center - light
-                    Color.argb((maxAlpha * 0.55f).toInt(), 175, 175, 180), // mid
-                    Color.argb(maxAlpha, 170, 170, 175)                    // edges - stronger
+                    Color.argb((maxAlpha * 0.12f).toInt(), 170, 170, 175), // center - almost clear
+                    Color.argb((maxAlpha * 0.35f).toInt(), 170, 170, 175), // mid
+                    Color.argb((maxAlpha * 0.75f).toInt(), 165, 165, 170), // outer
+                    Color.argb(maxAlpha, 160, 160, 165)                    // far edges
                 )
-                val stops = floatArrayOf(0f, 0.55f, 1f)
+                val stops = floatArrayOf(0.0f, 0.45f, 0.75f, 1.0f)
 
                 paint.shader = RadialGradient(
                     centerX, centerY, radius,
@@ -136,15 +136,25 @@ class PanelAccessibilityService : AccessibilityService() {
                 )
                 canvas.drawRect(0f, 0f, w, h, paint)
 
-                // Extra soft top bar tint (status area)
+                // Soft top strip (status bar area) - slightly stronger
                 val topPaint = Paint()
                 topPaint.shader = LinearGradient(
-                    0f, 0f, 0f, h * 0.12f,
-                    Color.argb((maxAlpha * 0.7f).toInt(), 160, 160, 165),
+                    0f, 0f, 0f, h * 0.11f,
+                    Color.argb((maxAlpha * 0.55f).toInt(), 155, 155, 160),
                     Color.TRANSPARENT,
                     Shader.TileMode.CLAMP
                 )
-                canvas.drawRect(0f, 0f, w, h * 0.14f, topPaint)
+                canvas.drawRect(0f, 0f, w, h * 0.13f, topPaint)
+
+                // Soft bottom fade
+                val bottomPaint = Paint()
+                bottomPaint.shader = LinearGradient(
+                    0f, h * 0.88f, 0f, h,
+                    Color.TRANSPARENT,
+                    Color.argb((maxAlpha * 0.45f).toInt(), 155, 155, 160),
+                    Shader.TileMode.CLAMP
+                )
+                canvas.drawRect(0f, h * 0.88f, w, h, bottomPaint)
             }
         }.apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
