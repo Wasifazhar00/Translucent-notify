@@ -18,10 +18,10 @@ import android.view.accessibility.AccessibilityEvent
 /**
  * Smart translucent overlay tuned for OnePlus 11R / OxygenOS QS layout.
  *
- * The overlay is forced to stay on top (platform limitation).
- * To keep icons and tiles readable we use a carefully shaped gradient:
- * - Very light in the main content area (tiles + icons)
- * - Stronger only on the outer edges and empty spaces
+ * Uses the standard application-overlay layer rather than an accessibility
+ * overlay. Android places application overlays below critical system windows;
+ * this is intended to let the native notification shade render above the tint.
+ * The exact shade ordering remains OEM-dependent and must be verified on-device.
  */
 class PanelAccessibilityService : AccessibilityService() {
 
@@ -102,8 +102,10 @@ class PanelAccessibilityService : AccessibilityService() {
         val manager = wm ?: return
 
         val tintPercent = Prefs.tintPercent(this).coerceIn(0, 100)
-        // Keep overall strength moderate so center can stay readable
-        val maxAlpha = (tintPercent * 180 / 100).coerceIn(0, 160)
+        // Keep a clearly visible grey wash through the transparent native panel.
+        // The native SystemUI content is in a higher window layer and remains
+        // interactive; this view itself never receives touch or focus.
+        val maxAlpha = (tintPercent * 180 / 100).coerceIn(0, 180)
 
         val view = object : View(this) {
             private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -120,15 +122,15 @@ class PanelAccessibilityService : AccessibilityService() {
                 val centerY = h * 0.46f
                 val radius = maxOf(w, h) * 0.68f
 
-                // Very light in the middle (where all the tiles live)
-                // Stronger only near the edges
+                // Keep the centre visibly tinted too; the native panel content
+                // (icons, notifications, QS tiles and menus) draws above this layer.
                 val colors = intArrayOf(
-                    Color.argb((maxAlpha * 0.12f).toInt(), 170, 170, 175), // center - almost clear
-                    Color.argb((maxAlpha * 0.35f).toInt(), 170, 170, 175), // mid
-                    Color.argb((maxAlpha * 0.75f).toInt(), 165, 165, 170), // outer
-                    Color.argb(maxAlpha, 160, 160, 165)                    // far edges
+                    Color.argb((maxAlpha * 0.58f).toInt(), 172, 172, 180),
+                    Color.argb((maxAlpha * 0.70f).toInt(), 168, 168, 176),
+                    Color.argb((maxAlpha * 0.86f).toInt(), 164, 164, 172),
+                    Color.argb(maxAlpha, 158, 158, 166)
                 )
-                val stops = floatArrayOf(0.0f, 0.45f, 0.75f, 1.0f)
+                val stops = floatArrayOf(0.0f, 0.48f, 0.78f, 1.0f)
 
                 paint.shader = RadialGradient(
                     centerX, centerY, radius,
@@ -171,7 +173,7 @@ class PanelAccessibilityService : AccessibilityService() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             flags,
             PixelFormat.TRANSLUCENT
         ).apply {
