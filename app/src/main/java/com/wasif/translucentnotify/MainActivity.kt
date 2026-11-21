@@ -6,7 +6,6 @@ import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
@@ -115,16 +114,8 @@ class MainActivity : Activity() {
     }
 
     private fun openServiceSettings() {
-        val component = ComponentName(this, PanelAccessibilityService::class.java)
-        if (Build.VERSION.SDK_INT >= 33) {
-            val detail = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
-                putExtra(Settings.EXTRA_ACCESSIBILITY_SERVICE_COMPONENT_NAME, component)
-            }
-            try {
-                startActivity(detail)
-                return
-            } catch (_: Exception) { }
-        }
+        // Use the public, broadly supported Accessibility Settings action.
+        // Android requires the user to enable the service manually.
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
