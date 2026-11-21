@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.view.Gravity
 import android.view.View
@@ -12,68 +13,110 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 
 /**
- * Background-only experiment. AOSP places TYPE_ACCESSIBILITY_OVERLAY below
- * TYPE_NOTIFICATION_SHADE, allowing System UI to remain above this layer.
- * Visibility through the shade depends on OxygenOS shade translucency.
+ * Detects the expanded System UI shade from accessibility window metadata.
+ * It deliberately reads only package/class/title/window geometry, never
+ * notification text or other notification content.
  */
 class PanelAccessibilityService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var layer: View? = null
+    private var lastShadeState = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        update(isShadeOpen())
+        refreshShadeState()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
-        update(isShadeOpen(event))
+        refreshShadeState(event)
     }
 
     override fun onInterrupt() = hideLayer()
+
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         hideLayer()
         return super.onUnbind(intent)
     }
+
     override fun onDestroy() {
         hideLayer()
         wm = null
         super.onDestroy()
     }
 
-    private fun isShadeOpen(event: AccessibilityEvent? = null): Boolean {
-        val names = mutableListOf<String>()
-        event?.className?.toString()?.let { names.add(it) }
-        event?.packageName?.toString()?.let { names.add(it) }
-        runCatching {
-            rootInActiveWindow?.let {
-                names.add(it.packageName?.toString().orEmpty())
-                names.add(it.className?.toString().orEmpty())
-            }
-            windows.forEach { win ->
-                val root = win.root ?: return@forEach
-                if (root.packageName?.toString() == "com.android.systemui") {
-                    names.add(root.className?.toString().orEmpty())
-                    if (Build.VERSION.SDK_INT >= 24) names.add(win.title?.toString().orEmpty())
-                }
-            }
-        }
-        return names.any { raw ->
-            val s = raw.lowercase()
-            s.contains("notificationshade") || s.contains("notificationpanel") ||
-                s.contains("expandedstatusbar") || s.contains("quicksettings") ||
-                s.contains("qscontainer") || s.contains("qsfragment")
+    private fun refreshShadeState(event: AccessibilityEvent? = null) {
+        val open = isShadeOpen(event)
+        if (open != lastShadeState) {
+            lastShadeState = open
+            if (open) showLayer() else hideLayer()
+        } else if (open && layer == null) {
+            // Recover if adding the window previously failed.
+            showLayer()
         }
     }
 
-    private fun isShadeOpen(): Boolean = isShadeOpen(null)
-    private fun update(open: Boolean) { if (open) showLayer() else hideLayer() }
+    private fun isShadeOpen(event: AccessibilityEvent? = null): Boolean {
+        val systemUi = "com.android.systemui"
+        val tokens = listOf(
+            "notificationshade", "notificationpanel", "notification_panel",
+            "expandedstatusbar", "expanded_status_bar", "statusbar",
+            "quicksettings", "quick_settings", "qscontainer", "qsfragment",
+            "shade", "brightnessmirror"
+        )
+
+        fun matches(value: CharSequence?): Boolean {
+            val text = value?.toString()?.lowercase().orEmpty()
+            return text.isNotEmpty() && tokens.any(text::contains)
+        }
+
+        // Event metadata is useful on builds that expose the shade as a state
+        // transition but omit it from the interactive-window list.
+        if (event?.packageName?.toString() == systemUi &&
+            matches(event.className)) return true
+
+        val screenHeight = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            resources.displayMetrics.heightPixels
+        } else {
+            resources.displayMetrics.heightPixels
+        }
+        var expandedSystemUiWindow = false
+
+        runCatching {
+            windows.forEach { window ->
+                val root = window.root
+                val packageName = root?.packageName?.toString()
+                val className = root?.className
+                val title = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) window.title else null
+                val belongsToSystemUi = packageName == systemUi ||
+                    event?.packageName?.toString() == systemUi
+
+                if (!belongsToSystemUi) return@forEach
+                if (matches(className) || matches(title)) {
+                    expandedSystemUiWindow = true
+                    return@forEach
+                }
+
+                // OxygenOS versions differ in internal class names. An expanded
+                // SystemUI window is also distinguishable from the thin status
+                // bar by its on-screen height. Do not treat small SystemUI
+                // windows (status bar, heads-up notifications) as the shade.
+                val bounds = Rect()
+                window.getBoundsInScreen(bounds)
+                if (bounds.height() >= (screenHeight * 0.38f).toInt() &&
+                    bounds.width() >= (resources.displayMetrics.widthPixels * 0.75f).toInt()) {
+                    expandedSystemUiWindow = true
+                }
+            }
+        }
+
+        return expandedSystemUiWindow
+    }
 
     private fun showLayer() {
         if (layer != null) return
         val manager = wm ?: return
-        val tint = Prefs.tintPercent(this)
+        val tint = Prefs.tintPercent(this).coerceIn(0, 100)
         val view = FrameLayout(this).apply {
             setBackgroundColor(Color.argb(tint * 255 / 100, 184, 184, 188))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -95,8 +138,10 @@ class PanelAccessibilityService : AccessibilityService() {
             gravity = Gravity.TOP or Gravity.START
             alpha = 1f
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                setBlurBehindRadius((Prefs.blurDp(this@PanelAccessibilityService) *
-                    resources.displayMetrics.density).toInt())
+                setBlurBehindRadius(
+                    (Prefs.blurDp(this@PanelAccessibilityService) *
+                        resources.displayMetrics.density).toInt().coerceAtLeast(0)
+                )
             }
         }
         runCatching {
