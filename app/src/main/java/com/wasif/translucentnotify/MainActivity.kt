@@ -55,7 +55,7 @@ class MainActivity : Activity() {
         })
         page.addView(label(
             "Enable Shade Background in Accessibility, then allow Display over other apps. " +
-                "Both are required so the translucent background can sit below the system shade.",
+                "Both are required. The app uses a standard app-overlay window intended to sit below critical SystemUI windows, so the native shade content stays above it. OxygenOS shade ordering must be verified on-device.",
             13,0xFFD0D0D5.toInt(),false
         ).apply { setPadding(0,dp(8),0,dp(18)) })
 
