@@ -7,7 +7,6 @@ import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
-import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -44,7 +43,12 @@ class MainActivity : Activity() {
         refreshStatus()
     }
 
-    override fun onResume() {\n        super.onResume()\n        if (::status.isInitialized) refreshStatus()\n    }\n\n    override fun onDestroy() {
+    override fun onResume() {
+        super.onResume()
+        if (::status.isInitialized) refreshStatus()
+    }
+
+    override fun onDestroy() {
         Shizuku.removeRequestPermissionResultListener(permissionListener)
         super.onDestroy()
     }
@@ -126,6 +130,7 @@ class MainActivity : Activity() {
         val supported = recognized
         slider.isEnabled = supported
         apply.isEnabled = supported && granted
+        reset.isEnabled = supported && granted
         permission.isEnabled = supported && shizukuRunning && !granted
         permission.text = if (granted) "Shizuku permission granted" else "Grant Shizuku permission"
         if (!supported) {
