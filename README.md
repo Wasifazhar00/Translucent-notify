@@ -6,25 +6,22 @@ Native Android experiment for OnePlus 11R (CPH2487) / OxygenOS 15–16.
 1. Install the APK and open Shade Background.
 2. Allow **Display over other apps**.
 3. Open Android Accessibility settings and enable **Shade Background**.
-4. Open the notification panel. A translucent grey layer will appear.
+4. Open the notification panel.
 
-## Current behavior (after latest fix)
-- The app draws a clean translucent grey tint when the notification shade is open.
-- **Blur is intentionally disabled by default** so notification icons, Quick Settings tiles and text stay sharp.
-- The layer is non-touchable. All gestures, notifications and menus remain fully interactive.
+## Current behavior (Smart Region version)
 
-## Important platform limitation
-On modern OxygenOS the accessibility / application overlay almost always ends up **above** the SystemUI notification shade.
+Because a normal app cannot place a window *under* the SystemUI notification shade, the overlay stays on top.
 
-A normal third-party app **cannot** force a window below the native notification shade without:
-- Root + SystemUI modification, or
-- An LSPosed / Xposed module that hooks SystemUI.
+To reduce the impact on icons and tiles we use a **smart non-uniform tint**:
 
-Because of this limitation the grey layer will sit on top of the shade. We therefore removed `FLAG_BLUR_BEHIND` so the icons and tiles are not frosted/blurred.
+- **Center area** (where notifications + Quick Settings usually sit) → much lighter / more transparent
+- **Outer edges** → stronger grey tint
+- Completely non-touchable so all gestures still work
 
-## What the accessibility service does
-It only watches for a large, top-anchored SystemUI window to decide when the shade is open. It never reads, stores or processes notification content.
+This is not perfect hole-punching, but it keeps the main content more readable than a flat full-screen blur/tint.
+
+## Platform limitation
+On modern OxygenOS a third-party app cannot force a layer below the notification shade. True under-panel blur requires root + LSPosed / SystemUI modification.
 
 ## Build
-Pushes to `main` trigger the GitHub Actions workflow that builds the APK.
-You can also run **Actions → Build APK → Run workflow** manually.
+Pushes to `main` automatically trigger the GitHub Actions APK build.
