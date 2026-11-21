@@ -1,18 +1,9 @@
 package com.wasif.translucentnotify
-
 import android.content.Context
-
 object Prefs {
-    const val MIN_OPACITY = 20
-    const val MAX_OPACITY = 100
-
-    fun opacity(ctx: Context): Int =
-        ctx.getSharedPreferences("panel", Context.MODE_PRIVATE)
-            .getInt("opacity", MAX_OPACITY)
-            .coerceIn(MIN_OPACITY, MAX_OPACITY)
-
-    fun setOpacity(ctx: Context, value: Int) {
-        ctx.getSharedPreferences("panel", Context.MODE_PRIVATE)
-            .edit().putInt("opacity", value.coerceIn(MIN_OPACITY, MAX_OPACITY)).apply()
-    }
+ private const val FILE = "shade_background"
+ fun tintPercent(c: Context) = c.getSharedPreferences(FILE,0).getInt("tint_percent",58).coerceIn(0,100)
+ fun setTintPercent(c: Context,v:Int) { c.getSharedPreferences(FILE,0).edit().putInt("tint_percent",v.coerceIn(0,100)).apply() }
+ fun blurDp(c: Context) = c.getSharedPreferences(FILE,0).getInt("blur_dp",30).coerceIn(0,80)
+ fun setBlurDp(c: Context,v:Int) { c.getSharedPreferences(FILE,0).edit().putInt("blur_dp",v.coerceIn(0,80)).apply() }
 }

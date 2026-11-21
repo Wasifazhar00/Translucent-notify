@@ -1,4 +1,2 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="a11y_description">Shows an adjustable-opacity notification panel when you swipe down from the top edge of the screen. It does not read screen content.</string>
-</resources>
+<resources><string name="a11y_description">Detects when the system notification shade is open and shows a background-only translucent layer underneath it. Does not read or store notification text.</string></resources>

@@ -1,23 +1,20 @@
-# Translucent Notify
+# Shade Background
 
-A minimal native Android app explaining the system-level limits on notification-shade transparency.
+Native Android experiment for OnePlus 11R / OxygenOS 16.
+
+## Intended effect
+Only a full-screen neutral-grey frosted/translucent background while the original System UI notification shade or Quick Settings pages are open. Original clock, icons, notifications, tiles, gestures and navigation remain System UI-owned. No app-created panel or notification content.
+
+## Approach
+- AccessibilityService detects System UI shade window metadata.
+- A non-touchable TYPE_ACCESSIBILITY_OVERLAY is used as a background layer.
+- AOSP window type ordering places accessibility overlays below TYPE_NOTIFICATION_SHADE.
+- Grey translucent fill and cross-window blur are used where supported.
+- Layer is removed when shade closes.
+- No notification listener, root, Shizuku, ADB, or draw-over-other-apps permission.
 
 ## Important limitation
+This is an experiment, not a guaranteed System UI modification. The effect is visible only if OxygenOS renders the notification-shade surface translucently. If the shade is fully opaque, an ordinary app cannot change that System UI surface. OxygenOS may also use different accessibility window class names; detection must be tested on the actual device. The service does not inspect or store notification text.
 
-Android 16 does not expose a supported public API for an ordinary third-party app to change the real System UI notification shade's transparency. This app therefore does not show a fake opacity slider or claim to apply unsupported changes.
-
-## App characteristics
-
-- Native Kotlin Android app.
-- No Shizuku, root, ADB commands, hidden system commands, or background services.
-- No notification listener, accessibility service, overlay permission, ads, analytics, or Internet permission.
-- Minimal UI and no special permissions.
-
-## Build APK from GitHub
-
-1. Open the repository's **Actions** tab.
-2. Select **Build APK**.
-3. Press **Run workflow** on the `main` branch.
-4. Download the generated APK artifact after the workflow succeeds.
-
-The workflow is manually triggered.
+## Build
+Manually run **Actions → Build APK → Run workflow**.
