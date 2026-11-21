@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.provider.Settings
 import android.view.Gravity
@@ -13,8 +14,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 
 /**
- * Shows a non-interactive application overlay only while a recognised
- * notification-shade or Quick Settings window is actually present.
+ * Shows a non-interactive application overlay only while an expanded
+ * notification-shade or Quick Settings window is visible.
  * Reads window metadata only; never reads notification contents.
  */
 class PanelAccessibilityService : AccessibilityService() {
@@ -28,7 +29,9 @@ class PanelAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        refreshShadeState(event)
+        // Re-evaluate live windows rather than trusting an event name. Some
+        // OxygenOS builds emit SystemUI content events while the shade is shut.
+        refreshShadeState()
     }
 
     override fun onInterrupt() = hideLayer()
@@ -44,15 +47,15 @@ class PanelAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun refreshShadeState(event: AccessibilityEvent? = null) {
+    private fun refreshShadeState() {
         if (!Settings.canDrawOverlays(this)) {
             hideLayer()
             return
         }
-        if (isShadeOpen(event)) showLayer() else hideLayer()
+        if (isShadeOpen()) showLayer() else hideLayer()
     }
 
-    private fun isShadeOpen(event: AccessibilityEvent? = null): Boolean {
+    private fun isShadeOpen(): Boolean {
         val systemUi = "com.android.systemui"
         val tokens = listOf(
             "notificationshade",
@@ -65,32 +68,32 @@ class PanelAccessibilityService : AccessibilityService() {
             "qscontainer",
             "qsfragment"
         )
-
         fun matches(value: CharSequence?): Boolean {
             val text = value?.toString()?.lowercase().orEmpty()
             return text.isNotEmpty() && tokens.any(text::contains)
         }
 
-        // Trust a matching event only when it explicitly comes from System UI.
-        if (event?.packageName?.toString() == systemUi && matches(event.className)) {
-            return true
-        }
-
-        // Only inspect actual System UI windows. Do not infer shade visibility
-        // from screen size: System UI also owns unrelated full-screen windows,
-        // which caused random activations during ordinary interaction.
+        val screenHeight = resources.displayMetrics.heightPixels
+        val screenWidth = resources.displayMetrics.widthPixels
         return runCatching {
             windows.any { window ->
-                val root = window.root
-                root?.packageName?.toString() == systemUi &&
-                    (matches(root.className) || matches(window.title))
+                val root = window.root ?: return@any false
+                if (root.packageName?.toString() != systemUi) return@any false
+                if (!matches(root.className) && !matches(window.title)) return@any false
+
+                // Require the identified shade window to be expanded. This
+                // prevents the always-present collapsed status-bar window
+                // from activating the layer during ordinary screen touches.
+                val bounds = Rect()
+                window.getBoundsInScreen(bounds)
+                bounds.width() >= (screenWidth * 0.75f).toInt() &&
+                    bounds.height() >= (screenHeight * 0.35f).toInt()
             }
         }.getOrDefault(false)
     }
 
     private fun showLayer() {
-        if (layer != null) return
-        if (!Settings.canDrawOverlays(this)) return
+        if (layer != null || !Settings.canDrawOverlays(this)) return
         val manager = wm ?: return
         val tint = Prefs.tintPercent(this).coerceIn(0, 100)
         val view = FrameLayout(this).apply {
