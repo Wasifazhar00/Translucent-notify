@@ -4,9 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.os.Build
-import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -14,9 +12,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 
 /**
- * Shows a non-interactive application overlay only while an expanded
- * notification-shade or Quick Settings window is visible.
- * Reads window metadata only; never reads notification contents.
+ * Background-only accessibility layer. It does not intercept touch or read
+ * notification contents. Activation requires an explicitly named shade/QS
+ * window from System UI; generic touch/content events are not sufficient.
  */
 class PanelAccessibilityService : AccessibilityService() {
     private var wm: WindowManager? = null
@@ -29,9 +27,7 @@ class PanelAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Re-evaluate live windows rather than trusting an event name. Some
-        // OxygenOS builds emit SystemUI content events while the shade is shut.
-        refreshShadeState()
+        refreshShadeState(event)
     }
 
     override fun onInterrupt() = hideLayer()
@@ -47,53 +43,39 @@ class PanelAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun refreshShadeState() {
-        if (!Settings.canDrawOverlays(this)) {
-            hideLayer()
-            return
-        }
-        if (isShadeOpen()) showLayer() else hideLayer()
+    private fun refreshShadeState(event: AccessibilityEvent? = null) {
+        val open = isShadeOpen(event)
+        if (open) showLayer() else hideLayer()
     }
 
-    private fun isShadeOpen(): Boolean {
+    private fun isShadeOpen(event: AccessibilityEvent? = null): Boolean {
         val systemUi = "com.android.systemui"
         val tokens = listOf(
-            "notificationshade",
-            "notificationpanel",
-            "notification_panel",
-            "expandedstatusbar",
-            "expanded_status_bar",
-            "quicksettings",
-            "quick_settings",
-            "qscontainer",
-            "qsfragment"
+            "notificationshade", "notificationpanel", "notification_panel",
+            "expandedstatusbar", "expanded_status_bar", "quicksettings",
+            "quick_settings", "qscontainer", "qsfragment"
         )
         fun matches(value: CharSequence?): Boolean {
-            val text = value?.toString()?.lowercase().orEmpty()
-            return text.isNotEmpty() && tokens.any(text::contains)
+            val name = value?.toString()?.lowercase().orEmpty()
+            return name.isNotEmpty() && tokens.any(name::contains)
         }
 
-        val screenHeight = resources.displayMetrics.heightPixels
-        val screenWidth = resources.displayMetrics.widthPixels
+        // Only explicit shade/QS identifiers qualify. No screen-size heuristics,
+        // generic SystemUI events, status-bar names, or touch events.
+        if (event?.packageName?.toString() == systemUi && matches(event.className)) {
+            return true
+        }
         return runCatching {
             windows.any { window ->
                 val root = window.root ?: return@any false
-                if (root.packageName?.toString() != systemUi) return@any false
-                if (!matches(root.className) && !matches(window.title)) return@any false
-
-                // Require the identified shade window to be expanded. This
-                // prevents the always-present collapsed status-bar window
-                // from activating the layer during ordinary screen touches.
-                val bounds = Rect()
-                window.getBoundsInScreen(bounds)
-                bounds.width() >= (screenWidth * 0.75f).toInt() &&
-                    bounds.height() >= (screenHeight * 0.35f).toInt()
+                root.packageName?.toString() == systemUi &&
+                    (matches(root.className) || matches(window.title))
             }
         }.getOrDefault(false)
     }
 
     private fun showLayer() {
-        if (layer != null || !Settings.canDrawOverlays(this)) return
+        if (layer != null) return
         val manager = wm ?: return
         val tint = Prefs.tintPercent(this).coerceIn(0, 100)
         val view = FrameLayout(this).apply {
@@ -110,7 +92,7 @@ class PanelAccessibilityService : AccessibilityService() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             flags,
             PixelFormat.TRANSLUCENT
         ).apply {
