@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.provider.Settings
 import android.view.Gravity
@@ -13,9 +14,12 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 
 /**
- * Adds a non-interactive tint below the native System UI shade.
- * Accessibility is used only to detect an explicitly identified shade/QS window.
- * Notification text and other window content are never inspected or stored.
+ * Draws a non-touchable translucent background as an application overlay.
+ * The native SystemUI shade is above this window, so its icons, notifications,
+ * menus and gestures remain in front and interactive.
+ *
+ * Accessibility window metadata is used only to detect the visible shade.
+ * Notification text/content is never traversed, read, or stored.
  */
 class PanelAccessibilityService : AccessibilityService() {
     private var wm: WindowManager? = null
@@ -28,7 +32,9 @@ class PanelAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        refreshShadeState(event)
+        // Window metadata can lag the event by a frame; always evaluate the
+        // current visible windows rather than trusting a stale class-name event.
+        refreshShadeState()
     }
 
     override fun onInterrupt() = hideLayer()
@@ -44,40 +50,54 @@ class PanelAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun refreshShadeState(event: AccessibilityEvent? = null) {
-        if (isShadeOpen(event)) showLayer() else hideLayer()
+    private fun refreshShadeState() {
+        if (isShadeOpen()) showLayer() else hideLayer()
     }
 
-    private fun isShadeOpen(event: AccessibilityEvent? = null): Boolean {
-        val systemUi = "com.android.systemui"
+    private fun isShadeOpen(): Boolean {
+        val systemUiPackage = "com.android.systemui"
         val tokens = listOf(
             "notificationshade", "notificationpanel", "notification_panel",
             "expandedstatusbar", "expanded_status_bar", "quicksettings",
-            "quick_settings", "qscontainer", "qsfragment"
+            "quick_settings", "qscontainer", "qsfragment", "shade"
         )
         fun matches(value: CharSequence?): Boolean {
             val name = value?.toString()?.lowercase().orEmpty()
             return name.isNotEmpty() && tokens.any(name::contains)
         }
 
-        // A shade-specific event is a positive signal. Otherwise inspect visible
-        // accessibility windows; never infer shade state from generic touch events.
-        if (event?.packageName?.toString() == systemUi && matches(event.className)) {
-            return true
-        }
+        val metrics = resources.displayMetrics
+        val screenWidth = metrics.widthPixels
+        val screenHeight = metrics.heightPixels
+        if (screenWidth <= 0 || screenHeight <= 0) return false
+
         return runCatching {
             windows.any { window ->
-                val root = window.root ?: return@any false
-                root.packageName?.toString() == systemUi &&
-                    (matches(root.className) || matches(window.title))
+                val bounds = Rect()
+                window.getBoundsInScreen(bounds)
+                if (bounds.width() < screenWidth * 0.60f ||
+                    bounds.height() < screenHeight * 0.18f ||
+                    bounds.top > screenHeight * 0.15f
+                ) return@any false
+
+                val root = window.root
+                val packageName = root?.packageName?.toString()
+                val identifiedByPackage = packageName == systemUiPackage
+                val identifiedByWindowName =
+                    matches(root?.className) || matches(window.title)
+
+                // OxygenOS can expose generic ViewRoot classes instead of
+                // AOSP shade class names. A large, top-anchored SystemUI
+                // accessibility window is therefore also accepted.
+                identifiedByPackage || identifiedByWindowName
             }
         }.getOrDefault(false)
     }
 
     private fun showLayer() {
-        if (layer != null) return
-        if (!Settings.canDrawOverlays(this)) return
+        if (layer != null || !Settings.canDrawOverlays(this)) return
         val manager = wm ?: return
+        val density = resources.displayMetrics.density
         val tint = Prefs.tintPercent(this).coerceIn(0, 100)
         val view = FrameLayout(this).apply {
             setBackgroundColor(Color.argb(tint * 255 / 100, 184, 184, 188))
@@ -100,8 +120,8 @@ class PanelAccessibilityService : AccessibilityService() {
             alpha = 1f
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 setBlurBehindRadius(
-                    (Prefs.blurDp(this@PanelAccessibilityService) *
-                        resources.displayMetrics.density).toInt().coerceIn(0, 80 * resources.displayMetrics.density.toInt().coerceAtLeast(1))
+                    (Prefs.blurDp(this@PanelAccessibilityService) * density)
+                        .toInt().coerceIn(0, (80 * density).toInt())
                 )
             }
         }
