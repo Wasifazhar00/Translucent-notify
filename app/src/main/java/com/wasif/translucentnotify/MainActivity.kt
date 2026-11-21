@@ -35,24 +35,27 @@ class MainActivity : Activity() {
         page.addView(label("Shade Background",27,Color.WHITE,true))
         page.addView(label(
             "A background-only frosted layer for the original notification shade. " +
-                "No replacement panel, icons, notifications or custom controls.",
+                "The original panel and its controls stay above the background.",
             14,0xFFD0D0D5.toInt(),false
         ).apply { setPadding(0,dp(10),0,dp(20)) })
 
-        page.addView(label("Accessibility service",18,Color.WHITE,true))
+        page.addView(label("Required permissions",18,Color.WHITE,true))
         permissionStatus = label("",14,0xFFFFD59A.toInt(),true)
         page.addView(permissionStatus.apply { setPadding(0,dp(8),0,dp(12)) })
 
         page.addView(Button(this).apply {
-            text = "Open this app's accessibility settings"
+            text = "Open Accessibility settings"
             isAllCaps = false
             setOnClickListener { openServiceSettings() }
         })
+        page.addView(Button(this).apply {
+            text = "Allow display over other apps"
+            isAllCaps = false
+            setOnClickListener { openOverlaySettings() }
+        })
         page.addView(label(
-            "If Android shows a Restricted setting warning, first open App info, use its three-dot menu " +
-                "to allow restricted settings if that option is available, then return here and open this service again. " +
-                "If the option is absent, install the latest APK normally from the downloaded file and retry. " +
-                "Android requires you to approve the service manually.",
+            "Enable Shade Background in Accessibility, then allow Display over other apps. " +
+                "Both are required so the translucent background can sit below the system shade.",
             13,0xFFD0D0D5.toInt(),false
         ).apply { setPadding(0,dp(8),0,dp(18)) })
 
@@ -99,13 +102,6 @@ class MainActivity : Activity() {
                 override fun onStopTrackingTouch(s:SeekBar?) = Unit
             })
         })
-
-        page.addView(label(
-            "No notification-listener or draw-over-other-apps permission is needed. " +
-                "If this service does not appear in Android's installed accessibility services list, " +
-                "the installed APK is not the updated build or Android did not register its service declaration.",
-            12,0xFFFFD59A.toInt(),false
-        ).apply { setPadding(0,dp(22),0,0) })
     }
 
     override fun onResume() {
@@ -114,9 +110,14 @@ class MainActivity : Activity() {
     }
 
     private fun openServiceSettings() {
-        // Use the public, broadly supported Accessibility Settings action.
-        // Android requires the user to enable the service manually.
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
+    private fun openOverlaySettings() {
+        startActivity(Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:$packageName")
+        ))
     }
 
     private fun refreshPermissionStatus() {
@@ -129,13 +130,15 @@ class MainActivity : Activity() {
                 it.packageName == expected.packageName && it.name == expected.className
             }
         }
-        permissionStatus.text = if (enabled) {
-            "Enabled — service is active."
-        } else {
-            "Disabled — tap the button above to open its settings."
+        val overlayAllowed = Settings.canDrawOverlays(this)
+        permissionStatus.text = buildString {
+            append("Accessibility: ")
+            append(if (enabled) "Enabled" else "Not enabled")
+            append("\nDisplay over other apps: ")
+            append(if (overlayAllowed) "Allowed" else "Not allowed")
         }
         permissionStatus.setTextColor(
-            if (enabled) 0xFF8FE3A0.toInt() else 0xFFFFD59A.toInt()
+            if (enabled && overlayAllowed) 0xFF8FE3A0.toInt() else 0xFFFFD59A.toInt()
         )
     }
 
