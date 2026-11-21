@@ -1,16 +1,12 @@
 package com.wasif.translucentnotify
 
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
-import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.view.Gravity
-import android.view.accessibility.AccessibilityManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
@@ -19,7 +15,6 @@ import android.widget.SeekBar
 import android.widget.TextView
 
 class MainActivity : Activity() {
-    private lateinit var permissionStatus: TextView
     private lateinit var tintLabel: TextView
     private lateinit var blurLabel: TextView
     private lateinit var selectedColorLabel: TextView
@@ -42,16 +37,10 @@ class MainActivity : Activity() {
 
         page.addView(label("Shade Background", 27, Color.WHITE, true))
         page.addView(label(
-            "Customize the tint over the original notification shade. This app does not replace the panel or read notification content.",
-            14, 0xFFD0D0D5.toInt(), false
+            "Appearance preferences are retained, but the panel overlay is disabled. Android/OxygenOS does not let a regular app place its layer behind the native notification shade, so disabling it keeps notifications, icons and controls clear and unobstructed.",
+            14, 0xFFFFC58A.toInt(), false
         ).apply { setPadding(0, dp(8), 0, dp(20)) })
 
-        page.addView(label("Required permissions", 18, Color.WHITE, true))
-        permissionStatus = label("", 14, 0xFFFFD59A.toInt(), true)
-        page.addView(permissionStatus.apply { setPadding(0, dp(8), 0, dp(12)) })
-
-        page.addView(actionButton("Open Accessibility settings") { openServiceSettings() })
-        page.addView(actionButton("Allow display over other apps") { openOverlaySettings() })
         page.addView(actionButton("Open app info") {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                 data = Uri.fromParts("package", packageName, null)
@@ -148,7 +137,6 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (::permissionStatus.isInitialized) refreshPermissionStatus()
     }
 
     private fun sectionTitle(value: String) =
