@@ -4,8 +4,8 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.os.Build
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -13,14 +13,13 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 
 /**
- * Detects the expanded System UI shade from accessibility window metadata.
- * It deliberately reads only package/class/title/window geometry, never
- * notification text or other notification content.
+ * Shows a non-interactive application overlay only while a recognised
+ * notification-shade or Quick Settings window is actually present.
+ * Reads window metadata only; never reads notification contents.
  */
 class PanelAccessibilityService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var layer: View? = null
-    private var lastShadeState = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -46,23 +45,25 @@ class PanelAccessibilityService : AccessibilityService() {
     }
 
     private fun refreshShadeState(event: AccessibilityEvent? = null) {
-        val open = isShadeOpen(event)
-        if (open != lastShadeState) {
-            lastShadeState = open
-            if (open) showLayer() else hideLayer()
-        } else if (open && layer == null) {
-            // Recover if adding the window previously failed.
-            showLayer()
+        if (!Settings.canDrawOverlays(this)) {
+            hideLayer()
+            return
         }
+        if (isShadeOpen(event)) showLayer() else hideLayer()
     }
 
     private fun isShadeOpen(event: AccessibilityEvent? = null): Boolean {
         val systemUi = "com.android.systemui"
         val tokens = listOf(
-            "notificationshade", "notificationpanel", "notification_panel",
-            "expandedstatusbar", "expanded_status_bar", "statusbar",
-            "quicksettings", "quick_settings", "qscontainer", "qsfragment",
-            "shade", "brightnessmirror"
+            "notificationshade",
+            "notificationpanel",
+            "notification_panel",
+            "expandedstatusbar",
+            "expanded_status_bar",
+            "quicksettings",
+            "quick_settings",
+            "qscontainer",
+            "qsfragment"
         )
 
         fun matches(value: CharSequence?): Boolean {
@@ -70,51 +71,26 @@ class PanelAccessibilityService : AccessibilityService() {
             return text.isNotEmpty() && tokens.any(text::contains)
         }
 
-        // Event metadata is useful on builds that expose the shade as a state
-        // transition but omit it from the interactive-window list.
-        if (event?.packageName?.toString() == systemUi &&
-            matches(event.className)) return true
-
-        val screenHeight = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            resources.displayMetrics.heightPixels
-        } else {
-            resources.displayMetrics.heightPixels
+        // Trust a matching event only when it explicitly comes from System UI.
+        if (event?.packageName?.toString() == systemUi && matches(event.className)) {
+            return true
         }
-        var expandedSystemUiWindow = false
 
-        runCatching {
-            windows.forEach { window ->
+        // Only inspect actual System UI windows. Do not infer shade visibility
+        // from screen size: System UI also owns unrelated full-screen windows,
+        // which caused random activations during ordinary interaction.
+        return runCatching {
+            windows.any { window ->
                 val root = window.root
-                val packageName = root?.packageName?.toString()
-                val className = root?.className
-                val title = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) window.title else null
-                val belongsToSystemUi = packageName == systemUi ||
-                    event?.packageName?.toString() == systemUi
-
-                if (!belongsToSystemUi) return@forEach
-                if (matches(className) || matches(title)) {
-                    expandedSystemUiWindow = true
-                    return@forEach
-                }
-
-                // OxygenOS versions differ in internal class names. An expanded
-                // SystemUI window is also distinguishable from the thin status
-                // bar by its on-screen height. Do not treat small SystemUI
-                // windows (status bar, heads-up notifications) as the shade.
-                val bounds = Rect()
-                window.getBoundsInScreen(bounds)
-                if (bounds.height() >= (screenHeight * 0.38f).toInt() &&
-                    bounds.width() >= (resources.displayMetrics.widthPixels * 0.75f).toInt()) {
-                    expandedSystemUiWindow = true
-                }
+                root?.packageName?.toString() == systemUi &&
+                    (matches(root.className) || matches(window.title))
             }
-        }
-
-        return expandedSystemUiWindow
+        }.getOrDefault(false)
     }
 
     private fun showLayer() {
         if (layer != null) return
+        if (!Settings.canDrawOverlays(this)) return
         val manager = wm ?: return
         val tint = Prefs.tintPercent(this).coerceIn(0, 100)
         val view = FrameLayout(this).apply {
@@ -131,7 +107,7 @@ class PanelAccessibilityService : AccessibilityService() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             flags,
             PixelFormat.TRANSLUCENT
         ).apply {
