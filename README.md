@@ -1,21 +1,40 @@
 # Translucent Notify
 
-A small native Android app exploring supported ways to adjust the appearance of the system notification shade.
+A compact native Android app for supported notification-shade appearance controls.
 
-## Compatibility truth
+## Important Android limitation
 
-Android does not expose a public API for third-party apps to set the system notification shade's alpha/transparency. A normal app overlay cannot reliably recolor or make System UI transparent. This project therefore detects the device/OS and only exposes an experimental system-property path on the specifically verified ColorOS 17 family. It must report unsupported on OxygenOS/other builds rather than pretending that a preview change affects the real shade.
+Android exposes no public API that lets an ordinary third-party app continuously change the real System UI notification shade's transparency. A normal app overlay cannot reliably alter the shade itself.
 
-The experimental ColorOS path uses Shizuku (user-authorized shell privileges) and the `debug.systemui.gaussblur_level` property. The property is proprietary, changes blur/appearance levels rather than a documented continuous alpha value, and is not guaranteed across updates. No System UI process is force-crashed by this app.
+This project therefore does not fake an opacity slider. It detects the system build and only enables an experimental proprietary appearance control on ColorOS 17 builds matching the currently researched implementation. It uses Shizuku with explicit user approval to write `debug.systemui.gaussblur_level`. The three device-defined presets are not calibrated opacity percentages and may require a System UI/device restart to take effect.
 
-## Build
+**OxygenOS 16 / OnePlus 11R is not currently a verified target.** On unrecognized builds the app disables apply/reset and makes no system change. Do not bypass this guard based on version-number similarity; a device-specific implementation must be verified first.
 
-Open the project in Android Studio or run `./gradlew assembleDebug` with JDK 17 and Android SDK 35 installed.
+## App characteristics
 
-## Manual APK build
+- Native Kotlin Android app; no Compose or large UI framework.
+- Minimum Android version: Android 8.0 (API 26).
+- Compile/target SDK: Android 15 (API 35).
+- Shizuku is optional and used only for the experimental compatible-device path.
+- No root requirement, ads, account, analytics, notification listener, accessibility service, or overlay permission.
+- No forced System UI crash/restart.
 
-GitHub Actions includes a manually-triggered workflow (`workflow_dispatch`). Run it from the Actions tab. The debug APK is uploaded as a workflow artifact for download.
+## Build locally
 
-## Permissions
+Install JDK 17, Android SDK Platform 35, Android Build Tools 35.0.0, and Gradle 8.9. Then run:
 
-Shizuku is optional and only requested for the experimental compatible-device path. No accessibility service, notification listener, overlay permission, account, analytics, or network access is required.
+```sh
+gradle --no-daemon assembleDebug
+```
+
+The APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
+
+## Build APK from GitHub (manual trigger)
+
+1. Open the repository's **Actions** tab.
+2. Select **Build APK**.
+3. Press **Run workflow** on the `main` branch.
+4. Wait for the job to finish successfully.
+5. Download the `translucent-notify-debug-apk` artifact from the completed run and extract the APK.
+
+The workflow is manual-only (`workflow_dispatch`) and retains artifacts for 14 days. It builds an installable debug-signed APK; it does not publish a Play Store release.
