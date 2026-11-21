@@ -14,15 +14,18 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 
 /**
- * Draws a non-touchable translucent background using the accessibility
- * overlay window type. This keeps the tint in the accessibility window layer
- * rather than the ordinary application-overlay layer. SystemUI shade content,
- * menus and gestures remain in front and interactive.
+ * Draws a non-touchable translucent grey layer.
  *
- * Accessibility window metadata is used only to detect the visible shade.
- * Notification text/content is never traversed, read, or stored.
+ * IMPORTANT LIMITATION (OxygenOS / OnePlus 11R):
+ * Even TYPE_ACCESSIBILITY_OVERLAY is almost always drawn ABOVE the
+ * notification shade. True "under the shade" is not possible without
+ * root or SystemUI modification.
+ *
+ * Therefore we intentionally avoid FLAG_BLUR_BEHIND by default so that
+ * notification icons, QS tiles and text are not blurred.
  */
 class PanelAccessibilityService : AccessibilityService() {
+
     private var wm: WindowManager? = null
     private var layer: View? = null
 
@@ -33,8 +36,7 @@ class PanelAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Window metadata can lag the event by a frame; always evaluate the
-        // current visible windows rather than trusting a stale class-name event.
+        // Always re-check current windows (event class names can be stale)
         refreshShadeState()
     }
 
@@ -60,11 +62,13 @@ class PanelAccessibilityService : AccessibilityService() {
         val tokens = listOf(
             "notificationshade", "notificationpanel", "notification_panel",
             "expandedstatusbar", "expanded_status_bar", "quicksettings",
-            "quick_settings", "qscontainer", "qsfragment", "shade"
+            "quick_settings", "qscontainer", "qsfragment", "shade",
+            "notificationstackscroller", "status_bar_expanded"
         )
+
         fun matches(value: CharSequence?): Boolean {
             val name = value?.toString()?.lowercase().orEmpty()
-            return name.isNotEmpty() && tokens.any(name::contains)
+            return name.isNotEmpty() && tokens.any { name.contains(it) }
         }
 
         val metrics = resources.displayMetrics
@@ -76,21 +80,22 @@ class PanelAccessibilityService : AccessibilityService() {
             windows.any { window ->
                 val bounds = Rect()
                 window.getBoundsInScreen(bounds)
-                if (bounds.width() < screenWidth * 0.60f ||
-                    bounds.height() < screenHeight * 0.18f ||
-                    bounds.top > screenHeight * 0.15f
-                ) return@any false
+
+                // Must be a large top-anchored window
+                if (bounds.width() < screenWidth * 0.55f ||
+                    bounds.height() < screenHeight * 0.15f ||
+                    bounds.top > screenHeight * 0.18f
+                ) {
+                    return@any false
+                }
 
                 val root = window.root
                 val packageName = root?.packageName?.toString()
                 val identifiedByPackage = packageName == systemUiPackage
-                val identifiedByWindowName =
+                val identifiedByName =
                     matches(root?.className) || matches(window.title)
 
-                // OxygenOS can expose generic ViewRoot classes instead of
-                // AOSP shade class names. A large, top-anchored SystemUI
-                // accessibility window is therefore also accepted.
-                identifiedByPackage || identifiedByWindowName
+                identifiedByPackage || identifiedByName
             }
         }.getOrDefault(false)
     }
@@ -98,18 +103,24 @@ class PanelAccessibilityService : AccessibilityService() {
     private fun showLayer() {
         if (layer != null) return
         val manager = wm ?: return
-        val density = resources.displayMetrics.density
+
         val tint = Prefs.tintPercent(this).coerceIn(0, 100)
         val view = FrameLayout(this).apply {
-            setBackgroundColor(Color.argb(tint * 255 / 100, 184, 184, 188))
+            // Neutral grey translucent background
+            setBackgroundColor(Color.argb(tint * 255 / 100, 180, 180, 185))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             isClickable = false
             isFocusable = false
+            isFocusableInTouchMode = false
         }
+
+        // Critical flags – NO FLAG_BLUR_BEHIND by default
+        // (blur would affect SystemUI icons because the overlay sits above the shade)
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -119,13 +130,11 @@ class PanelAccessibilityService : AccessibilityService() {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             alpha = 1f
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                setBlurBehindRadius(
-                    (Prefs.blurDp(this@PanelAccessibilityService) * density)
-                        .toInt().coerceIn(0, (80 * density).toInt())
-                )
-            }
+            // Intentionally do NOT call setBlurBehindRadius.
+            // On OxygenOS the overlay ends up above the shade, so blur
+            // would frost the icons, notifications and QS tiles.
         }
+
         runCatching {
             manager.addView(view, params)
             layer = view
