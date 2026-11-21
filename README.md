@@ -1,22 +1,20 @@
 # Shade Background
 
-Native Android experiment for OnePlus 11R / OxygenOS 16.
+Native Android experiment for OnePlus 11R (CPH2487) / OxygenOS 16.
 
-## Accessibility setup (Android 13+)
-1. Open Shade Background.
-2. Tap **Step 1 — Open app info**.
-3. If Android blocks the service, open the top-right three-dot menu and select **Allow restricted settings**. Android may show this option for sideloaded apps.
-4. Return to the app and tap **Step 2 — Open accessibility settings**.
-5. Find Shade Background under installed/downloaded services, enable it, and accept Android's confirmation.
-6. Return to the app; it checks whether the service is enabled.
+## Setup
+1. Install the APK and open Shade Background.
+2. Allow **Display over other apps**.
+3. Open Android Accessibility settings and enable **Shade Background**.
+4. Open the notification panel. The app attempts to show a grey translucent/blurred layer beneath the native SystemUI shade.
 
-Android intentionally requires the user to approve restricted settings and Accessibility. An app cannot silently grant itself these privileges or bypass the confirmation.
+## Intended behavior
+The app does not replace the notification shade. It does not draw over notification icons, notification cards, Quick Settings tiles, menus, or controls. The layer is a non-touchable application overlay placed below critical SystemUI windows. When the native shade has transparent areas, the tint can show through those areas while native shade content remains above it.
 
-## Privacy
-The service uses Accessibility window metadata to detect the System UI shade. It does not request Notification Listener access and does not read or store notification text.
+Accessibility window metadata is used only to detect a large, top-anchored SystemUI window. The service does not traverse notification nodes, read notification text, or store notification content.
 
-## Intended effect and limitation
-Only a grey frosted/translucent background layer is attempted behind the original notification shade and Quick Settings. The original System UI owns all icons, notifications, tiles and gestures. The layer uses a non-touchable TYPE_ACCESSIBILITY_OVERLAY and supported blur APIs. Visibility depends on OxygenOS shade window layering and whether the shade surface is translucent. An opaque System UI shade cannot be made transparent by an ordinary app.
+## Important platform limitation
+This approach depends on OxygenOS exposing the shade as a transparent SystemUI window and allowing the application overlay to remain visible underneath it. If OxygenOS makes the shade background opaque or suppresses application overlays while the shade is open, a normal third-party app cannot force the native SystemUI background to become transparent. That requires OEM/SystemUI support or privileged system modification.
 
 ## Build
-Manually run **Actions → Build APK → Run workflow**.
+Manually run **Actions → Build APK → Run workflow**. Pushes to main also trigger the build.
