@@ -163,39 +163,6 @@ class MainActivity : Activity() {
         selectedColorLabel.text = "Selected: " + names[Prefs.tintColor(this)]
     }
 
-    private fun openServiceSettings() {
-        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-    }
-
-    private fun openOverlaySettings() {
-        startActivity(Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName")
-        ))
-    }
-
-    private fun refreshPermissionStatus() {
-        val manager = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
-        val expected = ComponentName(this, PanelAccessibilityService::class.java)
-        val enabled = manager.getEnabledAccessibilityServiceList(
-            AccessibilityServiceInfo.FEEDBACK_ALL_MASK
-        ).any { info ->
-            info.resolveInfo.serviceInfo.let {
-                it.packageName == expected.packageName && it.name == expected.className
-            }
-        }
-        val overlayAllowed = Settings.canDrawOverlays(this)
-        permissionStatus.text = buildString {
-            append("Accessibility: ")
-            append(if (enabled) "Enabled" else "Not enabled")
-            append("\nDisplay over other apps: ")
-            append(if (overlayAllowed) "Allowed" else "Not allowed")
-        }
-        permissionStatus.setTextColor(
-            if (enabled && overlayAllowed) 0xFF8FE3A0.toInt() else 0xFFFFD59A.toInt()
-        )
-    }
-
     private fun label(text: String, size: Int, color: Int, bold: Boolean) =
         TextView(this).apply {
             this.text = text
