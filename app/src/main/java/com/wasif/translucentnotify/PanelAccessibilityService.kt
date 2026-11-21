@@ -14,8 +14,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 
 /**
- * Draws a non-touchable translucent background as an application overlay.
- * The native SystemUI shade is above this window, so its icons, notifications,
+ * Draws a non-touchable translucent background using the accessibility
+ * overlay window type. This keeps the tint in the accessibility window layer
+ * rather than the ordinary application-overlay layer. SystemUI shade content,
  * menus and gestures remain in front and interactive.
  *
  * Accessibility window metadata is used only to detect the visible shade.
@@ -95,7 +96,7 @@ class PanelAccessibilityService : AccessibilityService() {
     }
 
     private fun showLayer() {
-        if (layer != null || !Settings.canDrawOverlays(this)) return
+        if (layer != null) return
         val manager = wm ?: return
         val density = resources.displayMetrics.density
         val tint = Prefs.tintPercent(this).coerceIn(0, 100)
@@ -112,7 +113,7 @@ class PanelAccessibilityService : AccessibilityService() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             flags,
             PixelFormat.TRANSLUCENT
         ).apply {
