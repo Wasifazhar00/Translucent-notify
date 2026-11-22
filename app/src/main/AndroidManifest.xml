@@ -17,6 +17,16 @@
             </intent-filter>
         </activity>
 
+        <!-- Normal app window: always drawn below the notification shade. -->
+        <activity
+            android:name=".BackdropActivity"
+            android:exported="false"
+            android:theme="@style/Backdrop"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+
         <service
             android:name=".ShadeBlurService"
             android:exported="true"

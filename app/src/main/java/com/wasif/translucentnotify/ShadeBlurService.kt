@@ -2,37 +2,41 @@ package com.wasif.translucentnotify
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
-import android.graphics.Color
+import android.content.Intent
 import android.graphics.PixelFormat
 import android.graphics.Rect
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 
 /**
- * Shows ONE non-touchable layer (TYPE_APPLICATION_OVERLAY, window layer 12) while the notification
- * shade is open. The shade (layer 17-19) and status bar (15) draw above it, so they stay sharp and
- * fully interactive. The layer blurs whatever is behind it (app / home / wallpaper) and tints it grey.
- * It draws no text, icons or controls and never takes touches.
+ * Detects the notification shade and shows/hides BackdropActivity (a normal translucent app window,
+ * always below the shade). A 1x1 invisible overlay is kept only so the system lets this service start
+ * the activity from the background. It draws nothing and takes no touches.
  */
 class ShadeBlurService : AccessibilityService() {
     private lateinit var wm: WindowManager
     private val main = Handler(Looper.getMainLooper())
-    private var overlay: View? = null
+    private var anchor: View? = null
     private var previewUntil = 0L
+    private var lastLaunch = 0L
     private val check = Runnable { evaluate() }
+
+    /** True while the backdrop should be on screen. BackdropActivity reads this. */
+    @Volatile var wanted = false
+        private set
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        addAnchor()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -42,7 +46,7 @@ class ShadeBlurService : AccessibilityService() {
 
     override fun onInterrupt() = Unit
 
-    override fun onUnbind(intent: android.content.Intent?): Boolean {
+    override fun onUnbind(intent: Intent?): Boolean {
         cleanup()
         return super.onUnbind(intent)
     }
@@ -55,10 +59,30 @@ class ShadeBlurService : AccessibilityService() {
     private fun cleanup() {
         main.removeCallbacksAndMessages(null)
         hide()
+        anchor?.let { runCatching { wm.removeView(it) } }
+        anchor = null
         if (instance === this) instance = null
     }
 
+    private fun addAnchor() {
+        if (anchor != null || !Settings.canDrawOverlays(this)) return
+        val v = View(this)
+        val lp = WindowManager.LayoutParams(
+            1, 1,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        )
+        lp.gravity = Gravity.TOP or Gravity.START
+        runCatching {
+            wm.addView(v, lp)
+            anchor = v
+        }
+    }
+
     private fun evaluate() {
+        addAnchor()
         if (SystemClock.uptimeMillis() < previewUntil) return
         if (isShadeOpen()) show() else hide()
     }
@@ -77,55 +101,41 @@ class ShadeBlurService : AccessibilityService() {
     }
 
     fun show() {
-        if (overlay != null || !Settings.canDrawOverlays(this)) return
-        val tint = Prefs.tint(this)
-        val blur = Prefs.blur(this)
-        val v = View(this).apply {
-            setBackgroundColor(Color.argb(255 * tint / 100, 128, 128, 128))
-            alpha = 0f
-        }
-        val lp = WindowManager.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        )
-        if (Build.VERSION.SDK_INT >= 30) {
-            lp.layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-        }
-        if (Build.VERSION.SDK_INT >= 31 && blur > 0 && wm.isCrossWindowBlurEnabled) {
-            lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-            lp.blurBehindRadius = (blur * resources.displayMetrics.density).toInt()
-        }
+        wanted = true
+        if (BackdropActivity.instance != null) return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastLaunch < 800) return
+        lastLaunch = now
         runCatching {
-            wm.addView(v, lp)
-            overlay = v
-            v.animate().alpha(1f).setDuration(120).start()
+            startActivity(
+                Intent(this, BackdropActivity::class.java).addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                )
+            )
         }
     }
 
     fun hide() {
-        overlay?.let { runCatching { wm.removeView(it) } }
-        overlay = null
+        wanted = false
+        BackdropActivity.instance?.finish()
     }
 
-    /** Settings-screen test: show the layer for 5 s without needing shade detection. */
+    /** Settings-screen test: show the backdrop for 5 s without needing shade detection. */
     fun preview() {
         previewUntil = SystemClock.uptimeMillis() + 5000
-        hide()
         show()
-        main.postDelayed({ evaluate() }, 5100)
+        main.postDelayed({
+            previewUntil = 0L
+            evaluate()
+        }, 5100)
     }
 
     /** Text dump of all windows, used to calibrate shade detection on the real phone. */
     fun dumpWindows(): String {
         val r = Rect()
-        val sb = StringBuilder("open=${isShadeOpen()}\n")
+        val sb = StringBuilder("open=${isShadeOpen()} backdrop=${BackdropActivity.instance != null}\n")
         windows.sortedByDescending { it.layer }.forEach { w ->
             w.getBoundsInScreen(r)
             sb.append("L${w.layer} type=${w.type} pkg=${w.root?.packageName} ")
