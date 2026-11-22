@@ -1,6 +1,7 @@
 package com.wasif.translucentnotify
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -8,18 +9,17 @@ import android.view.View
 import android.view.WindowManager
 
 /**
- * Translucent, non-touchable, non-focusable NORMAL activity window. App windows are always drawn
- * below the notification shade, so the shade stays sharp. FLAG_BLUR_BEHIND blurs what is behind
- * this window (the app / home screen) and the window background adds the grey tint.
+ * Translucent, non-touchable, non-focusable NORMAL activity window, kept running (invisible) while a
+ * normal app is in front. When the shade opens, ShadeBlurService only flips setActive(true): blur + grey
+ * tint are applied to THIS existing window. No activity starts while the shade is open, so the shade
+ * is not collapsed. App windows are always below System UI, so the shade stays sharp.
  */
 class BackdropActivity : Activity() {
+    private lateinit var content: View
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         instance = this
-
-        val tint = Prefs.tint(this)
-        val blur = Prefs.blur(this)
 
         window.addFlags(
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -32,27 +32,43 @@ class BackdropActivity : Activity() {
             a.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
-        if (Build.VERSION.SDK_INT >= 31 && blur > 0 && windowManager.isCrossWindowBlurEnabled) {
+        if (Build.VERSION.SDK_INT >= 31) {
             a.flags = a.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-            a.blurBehindRadius = (blur * resources.displayMetrics.density).toInt()
+            a.blurBehindRadius = 0
         }
         window.attributes = a
 
-        val v = View(this)
-        v.setBackgroundColor(Color.argb(255 * tint / 100, 128, 128, 128))
-        setContentView(v)
+        content = View(this)
+        content.setBackgroundColor(Color.TRANSPARENT)
+        setContentView(content)
         overridePendingTransition(0, 0)
+
+        if (ShadeBlurService.instance?.active == true) setActive(true)
     }
 
-    override fun onResume() {
-        super.onResume()
-        val svc = ShadeBlurService.instance
-        // Shade already closed before this window finished opening.
-        if (svc?.wanted != true) {
-            finish()
-            return
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        if (ShadeBlurService.instance?.active == true) setActive(true)
+    }
+
+    /** Turn the frosted look on/off on this already-running window. */
+    fun setActive(on: Boolean) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
+            val tint = Prefs.tint(this)
+            val blur = Prefs.blur(this)
+            content.setBackgroundColor(
+                if (on) Color.argb(255 * tint / 100, 128, 128, 128) else Color.TRANSPARENT
+            )
+            if (Build.VERSION.SDK_INT >= 31) {
+                val a = window.attributes
+                a.blurBehindRadius =
+                    if (on && blur > 0 && windowManager.isCrossWindowBlurEnabled)
+                        (blur * resources.displayMetrics.density).toInt()
+                    else 0
+                window.attributes = a
+            }
         }
-        svc.onBackdropReady()
     }
 
     override fun finish() {

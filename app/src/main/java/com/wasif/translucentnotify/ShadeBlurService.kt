@@ -16,23 +16,22 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 
 /**
- * Detects the notification shade and shows/hides BackdropActivity (a normal translucent app window,
- * always below the shade). Starting an activity makes the system collapse the shade, so after the
- * backdrop is up the service reopens the shade once. A 1x1 invisible overlay is kept only so the
- * system lets this service start the activity from the background. It draws nothing, takes no touches.
+ * Keeps BackdropActivity (a normal translucent app window, always below the shade) running invisibly
+ * behind the foreground app, and switches its blur/tint on only while the shade is open.
+ * Nothing is launched while the shade is open, because starting an activity collapses the shade.
+ * A 1x1 invisible overlay is kept only so Android allows the background launch.
  */
 class ShadeBlurService : AccessibilityService() {
     private lateinit var wm: WindowManager
     private val main = Handler(Looper.getMainLooper())
     private var anchor: View? = null
     private var previewUntil = 0L
-    private var holdUntil = 0L
     private var lastLaunch = 0L
-    private var reopenPending = false
+    private var armedFor: String? = null
     private val check = Runnable { evaluate() }
 
-    /** True while the backdrop should be on screen. BackdropActivity reads this. */
-    @Volatile var wanted = false
+    /** True while the frosted look should be on. */
+    @Volatile var active = false
         private set
 
     override fun onServiceConnected() {
@@ -40,6 +39,7 @@ class ShadeBlurService : AccessibilityService() {
         instance = this
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         addAnchor()
+        main.post { evaluate() }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -61,9 +61,11 @@ class ShadeBlurService : AccessibilityService() {
 
     private fun cleanup() {
         main.removeCallbacksAndMessages(null)
-        hide()
+        active = false
+        BackdropActivity.instance?.finish()
         anchor?.let { runCatching { wm.removeView(it) } }
         anchor = null
+        armedFor = null
         if (instance === this) instance = null
     }
 
@@ -86,10 +88,52 @@ class ShadeBlurService : AccessibilityService() {
 
     private fun evaluate() {
         addAnchor()
+        if (SystemClock.uptimeMillis() < previewUntil) return
+        if (isShadeOpen()) {
+            setActive(true)          // only flips blur/tint on the existing window
+        } else {
+            setActive(false)
+            ensureArmed()            // launch only while the shade is closed
+        }
+    }
+
+    private fun setActive(on: Boolean) {
+        active = on
+        BackdropActivity.instance?.setActive(on)
+    }
+
+    /** Topmost normal app window's package, or null. */
+    private fun topAppPackage(): String? =
+        windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            .maxByOrNull { it.layer }
+            ?.root?.packageName?.toString()
+
+    /**
+     * Make sure the (invisible) backdrop window sits right above the current foreground app.
+     * Re-launched whenever the foreground app changes. Never called while the shade is open.
+     */
+    private fun ensureArmed() {
+        if (!Settings.canDrawOverlays(this)) return
+        val top = topAppPackage() ?: return
+        if (top == packageName) return                      // our backdrop or our own screen is on top
+        if (BackdropActivity.instance != null && top == armedFor) return
         val now = SystemClock.uptimeMillis()
-        // Ignore the shade-closed signal while the backdrop launches and the shade is reopened.
-        if (now < previewUntil || now < holdUntil) return
-        if (isShadeOpen()) show(false) else hide()
+        if (now - lastLaunch < 600) return
+        lastLaunch = now
+        armedFor = top
+        launchBackdrop()
+    }
+
+    private fun launchBackdrop() {
+        runCatching {
+            startActivity(
+                Intent(this, BackdropActivity::class.java).addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                )
+            )
+        }
     }
 
     /** Heuristic: a large, focused/active System UI window of type SYSTEM = shade or Quick Settings open. */
@@ -105,52 +149,12 @@ class ShadeBlurService : AccessibilityService() {
         }
     }
 
-    private fun show(isPreview: Boolean) {
-        wanted = true
-        if (BackdropActivity.instance != null) return
-        val now = SystemClock.uptimeMillis()
-        if (now - lastLaunch < 800) return
-        lastLaunch = now
-        if (!isPreview) {
-            reopenPending = true
-            holdUntil = now + 2500
-        }
-        try {
-            startActivity(
-                Intent(this, BackdropActivity::class.java).addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_NO_ANIMATION or
-                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
-                )
-            )
-        } catch (e: Exception) {
-            reopenPending = false
-            holdUntil = 0L
-            wanted = false
-        }
-    }
-
-    /** Called by BackdropActivity once it is on screen. Reopens the shade the launch collapsed. */
-    fun onBackdropReady() {
-        if (!reopenPending) return
-        reopenPending = false
-        main.postDelayed({
-            if (!wanted) return@postDelayed
-            if (!isShadeOpen()) performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
-            holdUntil = SystemClock.uptimeMillis() + 1000
-        }, 150)
-    }
-
-    fun hide() {
-        wanted = false
-        reopenPending = false
-        BackdropActivity.instance?.finish()
-    }
-
-    /** Settings-screen test: show the backdrop for 5 s without needing shade detection. */
+    /** Settings-screen test: frosted look for 5 s without needing shade detection. */
     fun preview() {
         previewUntil = SystemClock.uptimeMillis() + 5000
-        show(true)
+        if (BackdropActivity.instance == null) launchBackdrop()
+        active = true
+        main.postDelayed({ BackdropActivity.instance?.setActive(true) }, 700)
         main.postDelayed({
             previewUntil = 0L
             evaluate()
@@ -160,7 +164,9 @@ class ShadeBlurService : AccessibilityService() {
     /** Text dump of all windows, used to calibrate shade detection on the real phone. */
     fun dumpWindows(): String {
         val r = Rect()
-        val sb = StringBuilder("open=${isShadeOpen()} backdrop=${BackdropActivity.instance != null}\n")
+        val sb = StringBuilder(
+            "open=${isShadeOpen()} backdrop=${BackdropActivity.instance != null} armedFor=$armedFor top=${topAppPackage()}\n"
+        )
         windows.sortedByDescending { it.layer }.forEach { w ->
             w.getBoundsInScreen(r)
             sb.append("L${w.layer} type=${w.type} pkg=${w.root?.packageName} ")
