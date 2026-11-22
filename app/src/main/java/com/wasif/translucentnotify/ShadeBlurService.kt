@@ -3,6 +3,7 @@ package com.wasif.translucentnotify
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Handler
@@ -17,13 +18,15 @@ import android.view.accessibility.AccessibilityWindowInfo
 
 /**
  * Keeps BackdropActivity (a normal translucent app window, always below the shade) running invisibly
- * behind the foreground app, and switches its blur/tint on only while the shade is open.
+ * over the HOME SCREEN (or every app, if the user turns that on), and switches its blur/tint on only
+ * while the shade is open.
  *
  * Rules learned from testing on OnePlus 11R:
  *  - Never start an activity while ANY big System UI window is up (shade opening, fingerprint popup...):
  *    it collapses the shade / cancels the biometric prompt.
  *  - Only the real notification shade / Quick Settings turns the blur on, not other System UI popups.
- *  - Arm the backdrop only after the foreground app has been stable for a moment.
+ *  - An invisible window kept over normal apps makes them laggy, so by default it exists only over
+ *    the home screen and is removed as soon as another app is in front.
  */
 class ShadeBlurService : AccessibilityService() {
     private enum class Sys { NONE, SHADE, OTHER }
@@ -36,6 +39,7 @@ class ShadeBlurService : AccessibilityService() {
     private var armedFor: String? = null
     private var pendingArm: String? = null
     private var lastSysUiClass: String? = null
+    private var homePkg: String? = null
     private val check = Runnable { evaluate() }
     private val armCheck = Runnable { armNow() }
 
@@ -47,6 +51,12 @@ class ShadeBlurService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        homePkg = runCatching {
+            packageManager.resolveActivity(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                PackageManager.MATCH_DEFAULT_ONLY
+            )?.activityInfo?.packageName
+        }.getOrNull()
         addAnchor()
         main.post { evaluate() }
     }
@@ -155,12 +165,14 @@ class ShadeBlurService : AccessibilityService() {
         return if (c.any { it.isActive || it.isFocused }) Sys.SHADE else Sys.OTHER
     }
 
-    // ---------- arming (only while System UI is quiet) ----------
+    // ---------- arming (only while System UI is quiet, only where allowed) ----------
 
     private fun topAppPackage(): String? =
         windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
             .maxByOrNull { it.layer }
             ?.root?.packageName?.toString()
+
+    private fun allowedOver(pkg: String): Boolean = Prefs.armAll(this) || pkg == homePkg
 
     private fun cancelArm() {
         pendingArm = null
@@ -171,6 +183,15 @@ class ShadeBlurService : AccessibilityService() {
         if (!Settings.canDrawOverlays(this)) return cancelArm()
         val top = topAppPackage()
         if (top == null || top == packageName) return cancelArm()
+        if (!allowedOver(top)) {
+            // Another app is in front: remove the backdrop so that app is completely untouched.
+            cancelArm()
+            if (BackdropActivity.instance != null) {
+                BackdropActivity.instance?.finish()
+                armedFor = null
+            }
+            return
+        }
         if (BackdropActivity.instance != null && top == armedFor) return cancelArm()
         if (pendingArm == top) return
         pendingArm = top
@@ -182,7 +203,7 @@ class ShadeBlurService : AccessibilityService() {
         val top = topAppPackage()
         val want = pendingArm
         pendingArm = null
-        if (want == null || top != want) return
+        if (want == null || top != want || !allowedOver(top)) return
         if (classify() != Sys.NONE) return          // a System UI window appeared meanwhile
         val now = SystemClock.uptimeMillis()
         if (now - lastLaunch < 600) return
@@ -220,7 +241,7 @@ class ShadeBlurService : AccessibilityService() {
         val r = Rect()
         val sb = StringBuilder(
             "class=${classify()} sysUiClass=$lastSysUiClass backdrop=${BackdropActivity.instance != null} " +
-                "armedFor=$armedFor top=${topAppPackage()}\n"
+                "armedFor=$armedFor top=${topAppPackage()} home=$homePkg armAll=${Prefs.armAll(this)}\n"
         )
         windows.sortedByDescending { it.layer }.forEach { w ->
             w.getBoundsInScreen(r)

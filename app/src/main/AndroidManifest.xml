@@ -3,6 +3,14 @@
 
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- Needed on Android 11+ to find which app is the home launcher. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:label="Translucent Notify"

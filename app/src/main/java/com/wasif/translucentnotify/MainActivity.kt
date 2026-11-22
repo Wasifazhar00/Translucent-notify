@@ -16,6 +16,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
@@ -70,6 +71,18 @@ class MainActivity : Activity() {
         page.addView(slider(100, Prefs.blur(this), "") { Prefs.setBlur(this, it) })
         blurStatus = label("", 12, 0xFF9AA8BC.toInt(), false)
         page.addView(blurStatus)
+
+        page.addView(label("Where it works", 16, Color.WHITE, true).apply { setPadding(0, dp(22), 0, 0) })
+        page.addView(label(
+            "Default: only over the home screen, so no other app is touched. Turn this on to also work over other apps (they may lag or pause).",
+            12, 0xFF9AA8BC.toInt(), false
+        ))
+        page.addView(Switch(this).apply {
+            text = "Also work over other apps"
+            setTextColor(Color.WHITE)
+            isChecked = Prefs.armAll(this@MainActivity)
+            setOnCheckedChangeListener { _, checked -> Prefs.setArmAll(this@MainActivity, checked) }
+        })
 
         page.addView(button("Test layer (5 seconds)") {
             val s = ShadeBlurService.instance
