@@ -46,8 +46,13 @@ class BackdropActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        val svc = ShadeBlurService.instance
         // Shade already closed before this window finished opening.
-        if (ShadeBlurService.instance?.wanted != true) finish()
+        if (svc?.wanted != true) {
+            finish()
+            return
+        }
+        svc.onBackdropReady()
     }
 
     override fun finish() {
