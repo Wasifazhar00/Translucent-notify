@@ -9,10 +9,9 @@ import android.view.View
 import android.view.WindowManager
 
 /**
- * Translucent, non-touchable, non-focusable NORMAL activity window, kept running (invisible) while a
- * normal app is in front. When the shade opens, ShadeBlurService only flips setActive(true): blur + grey
- * tint are applied to THIS existing window. No activity starts while the shade is open, so the shade
- * is not collapsed. App windows are always below System UI, so the shade stays sharp.
+ * Translucent, non-touchable, non-focusable NORMAL activity window. It exists ONLY while the shade is
+ * open: ShadeBlurService starts it when the shade opens and finishes it when the shade closes.
+ * App windows are always drawn below System UI, so the shade stays sharp and fully usable.
  */
 class BackdropActivity : Activity() {
     private lateinit var content: View
@@ -46,12 +45,17 @@ class BackdropActivity : Activity() {
         if (ShadeBlurService.instance?.active == true) setActive(true)
     }
 
+    override fun onResume() {
+        super.onResume()
+        ShadeBlurService.instance?.onBackdropResumed()
+    }
+
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         if (ShadeBlurService.instance?.active == true) setActive(true)
     }
 
-    /** Turn the frosted look on/off on this already-running window. */
+    /** Turn the frosted look on/off on this window. */
     fun setActive(on: Boolean) {
         runOnUiThread {
             if (isFinishing || isDestroyed) return@runOnUiThread

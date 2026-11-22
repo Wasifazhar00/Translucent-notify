@@ -3,7 +3,6 @@ package com.wasif.translucentnotify
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Handler
@@ -17,16 +16,14 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 
 /**
- * Keeps BackdropActivity (a normal translucent app window, always below the shade) running invisibly
- * over the HOME SCREEN (or every app, if the user turns that on), and switches its blur/tint on only
- * while the shade is open.
+ * ON-DEMAND blur behind the notification shade. Idle = nothing: no window, no overlay, and the service
+ * only receives events from System UI (never from other apps).
  *
- * Rules learned from testing on OnePlus 11R:
- *  - Never start an activity while ANY big System UI window is up (shade opening, fingerprint popup...):
- *    it collapses the shade / cancels the biometric prompt.
- *  - Only the real notification shade / Quick Settings turns the blur on, not other System UI popups.
- *  - An invisible window kept over normal apps makes them laggy, so by default it exists only over
- *    the home screen and is removed as soon as another app is in front.
+ * Shade opens  -> start BackdropActivity (a normal app window, always below the shade) with blur + tint.
+ *                 Starting an activity makes Android collapse the shade, so the shade is re-opened
+ *                 automatically right away (GLOBAL_ACTION_NOTIFICATIONS).
+ * Shade closes -> BackdropActivity is finished, nothing is left behind.
+ * Other System UI popups (fingerprint etc.) are ignored.
  */
 class ShadeBlurService : AccessibilityService() {
     private enum class Sys { NONE, SHADE, OTHER }
@@ -36,12 +33,10 @@ class ShadeBlurService : AccessibilityService() {
     private var anchor: View? = null
     private var previewUntil = 0L
     private var lastLaunch = 0L
-    private var armedFor: String? = null
-    private var pendingArm: String? = null
+    private var reopenPending = false
     private var lastSysUiClass: String? = null
-    private var homePkg: String? = null
     private val check = Runnable { evaluate() }
-    private val armCheck = Runnable { armNow() }
+    private val clearPending = Runnable { reopenPending = false }
 
     /** True while the frosted look should be on. */
     @Volatile var active = false
@@ -51,25 +46,14 @@ class ShadeBlurService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        homePkg = runCatching {
-            packageManager.resolveActivity(
-                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
-                PackageManager.MATCH_DEFAULT_ONLY
-            )?.activityInfo?.packageName
-        }.getOrNull()
-        addAnchor()
-        main.post { evaluate() }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event != null &&
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            event.packageName?.toString() == SYSTEMUI
-        ) {
+        if (event != null && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             lastSysUiClass = event.className?.toString()
         }
         main.removeCallbacks(check)
-        main.postDelayed(check, 40)
+        main.post(check)
     }
 
     override fun onInterrupt() = Unit
@@ -87,46 +71,37 @@ class ShadeBlurService : AccessibilityService() {
     private fun cleanup() {
         main.removeCallbacksAndMessages(null)
         active = false
+        reopenPending = false
         BackdropActivity.instance?.finish()
-        anchor?.let { runCatching { wm.removeView(it) } }
-        anchor = null
-        armedFor = null
-        pendingArm = null
+        removeAnchor()
         if (instance === this) instance = null
     }
 
-    private fun addAnchor() {
-        if (anchor != null || !Settings.canDrawOverlays(this)) return
-        val v = View(this)
-        val lp = WindowManager.LayoutParams(
-            1, 1,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            PixelFormat.TRANSLUCENT
-        )
-        lp.gravity = Gravity.TOP or Gravity.START
-        runCatching {
-            wm.addView(v, lp)
-            anchor = v
-        }
-    }
+    // ---------- main logic ----------
 
     private fun evaluate() {
-        addAnchor()
         if (SystemClock.uptimeMillis() < previewUntil) return
         when (classify()) {
             Sys.SHADE -> {
-                cancelArm()
-                setActive(true)          // only flips blur/tint on the existing window
+                setActive(true)
+                if (BackdropActivity.instance == null &&
+                    SystemClock.uptimeMillis() - lastLaunch > 800
+                ) {
+                    reopenPending = true            // the launch will collapse the shade: re-open it
+                    main.removeCallbacks(clearPending)
+                    main.postDelayed(clearPending, 1000)
+                    launchBackdrop()
+                }
             }
-            Sys.OTHER -> {
-                cancelArm()              // fingerprint popup etc.: do nothing, launch nothing
-                setActive(false)
-            }
+            Sys.OTHER -> setActive(false)           // fingerprint popup etc.: ignore
             Sys.NONE -> {
                 setActive(false)
-                scheduleArm()
+                if (reopenPending) {
+                    reopenPending = false
+                    performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)   // bring the shade back over the backdrop
+                } else {
+                    BackdropActivity.instance?.finish()   // shade really closed: remove everything
+                }
             }
         }
     }
@@ -134,6 +109,10 @@ class ShadeBlurService : AccessibilityService() {
     private fun setActive(on: Boolean) {
         active = on
         BackdropActivity.instance?.setActive(on)
+    }
+
+    fun onBackdropResumed() {
+        removeAnchor()
     }
 
     // ---------- System UI classification ----------
@@ -159,60 +138,38 @@ class ShadeBlurService : AccessibilityService() {
         val titles = c.mapNotNull { it.title?.toString()?.lowercase() }.filter { it.isNotBlank() }
         if (titles.any { t -> SHADE_HINTS.any { t.contains(it) } }) return Sys.SHADE
         if (SHADE_HINTS.any { cls.contains(it) }) return Sys.SHADE
-        // Titles exist but none look like the shade (e.g. a fingerprint dialog): not the shade.
         if (titles.isNotEmpty()) return Sys.OTHER
-        // No information at all: fall back to "big, active/focused System UI window = shade".
         return if (c.any { it.isActive || it.isFocused }) Sys.SHADE else Sys.OTHER
     }
 
-    // ---------- arming (only while System UI is quiet, only where allowed) ----------
+    // ---------- launching ----------
 
-    private fun topAppPackage(): String? =
-        windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-            .maxByOrNull { it.layer }
-            ?.root?.packageName?.toString()
-
-    private fun allowedOver(pkg: String): Boolean = Prefs.armAll(this) || pkg == homePkg
-
-    private fun cancelArm() {
-        pendingArm = null
-        main.removeCallbacks(armCheck)
-    }
-
-    private fun scheduleArm() {
-        if (!Settings.canDrawOverlays(this)) return cancelArm()
-        val top = topAppPackage()
-        if (top == null || top == packageName) return cancelArm()
-        if (!allowedOver(top)) {
-            // Another app is in front: remove the backdrop so that app is completely untouched.
-            cancelArm()
-            if (BackdropActivity.instance != null) {
-                BackdropActivity.instance?.finish()
-                armedFor = null
-            }
-            return
+    /** 1x1 invisible overlay that exists only for the instant of the launch (lets Android allow it). */
+    private fun addAnchor() {
+        if (anchor != null || !Settings.canDrawOverlays(this)) return
+        val v = View(this)
+        val lp = WindowManager.LayoutParams(
+            1, 1,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        )
+        lp.gravity = Gravity.TOP or Gravity.START
+        runCatching {
+            wm.addView(v, lp)
+            anchor = v
         }
-        if (BackdropActivity.instance != null && top == armedFor) return cancelArm()
-        if (pendingArm == top) return
-        pendingArm = top
-        main.removeCallbacks(armCheck)
-        main.postDelayed(armCheck, ARM_DELAY_MS)
     }
 
-    private fun armNow() {
-        val top = topAppPackage()
-        val want = pendingArm
-        pendingArm = null
-        if (want == null || top != want || !allowedOver(top)) return
-        if (classify() != Sys.NONE) return          // a System UI window appeared meanwhile
-        val now = SystemClock.uptimeMillis()
-        if (now - lastLaunch < 600) return
-        lastLaunch = now
-        armedFor = top
-        launchBackdrop()
+    private fun removeAnchor() {
+        anchor?.let { runCatching { wm.removeView(it) } }
+        anchor = null
     }
 
     private fun launchBackdrop() {
+        lastLaunch = SystemClock.uptimeMillis()
+        addAnchor()
         runCatching {
             startActivity(
                 Intent(this, BackdropActivity::class.java).addFlags(
@@ -222,6 +179,7 @@ class ShadeBlurService : AccessibilityService() {
                 )
             )
         }
+        main.postDelayed({ removeAnchor() }, 1500)   // safety: never leave the anchor behind
     }
 
     /** Settings-screen test: frosted look for 5 s without needing shade detection. */
@@ -232,7 +190,8 @@ class ShadeBlurService : AccessibilityService() {
         main.postDelayed({ BackdropActivity.instance?.setActive(true) }, 700)
         main.postDelayed({
             previewUntil = 0L
-            evaluate()
+            setActive(false)
+            BackdropActivity.instance?.finish()
         }, 5100)
     }
 
@@ -241,11 +200,11 @@ class ShadeBlurService : AccessibilityService() {
         val r = Rect()
         val sb = StringBuilder(
             "class=${classify()} sysUiClass=$lastSysUiClass backdrop=${BackdropActivity.instance != null} " +
-                "armedFor=$armedFor top=${topAppPackage()} home=$homePkg armAll=${Prefs.armAll(this)}\n"
+                "reopenPending=$reopenPending\n"
         )
         windows.sortedByDescending { it.layer }.forEach { w ->
             w.getBoundsInScreen(r)
-            sb.append("L${w.layer} type=${w.type} pkg=${w.root?.packageName} title=${w.title} ")
+            sb.append("L${w.layer} type=${w.type} title=${w.title} ")
                 .append("act=${w.isActive} foc=${w.isFocused} ")
                 .append("h=${r.height()} y=${r.top}\n")
         }
@@ -255,7 +214,6 @@ class ShadeBlurService : AccessibilityService() {
     companion object {
         @Volatile var instance: ShadeBlurService? = null
         private const val SYSTEMUI = "com.android.systemui"
-        private const val ARM_DELAY_MS = 1500L
         private val SHADE_HINTS = listOf("shade", "quick settings", "quicksettings", "notification panel", "notificationpanel")
         private val BIOMETRIC_HINTS = listOf("biometric", "authcontainer", "fingerprint", "faceunlock", "udfps")
     }
