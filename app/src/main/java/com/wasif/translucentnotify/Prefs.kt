@@ -3,38 +3,13 @@ package com.wasif.translucentnotify
 import android.content.Context
 
 object Prefs {
-    private const val FILE = "shade_background"
+    private fun sp(c: Context) = c.getSharedPreferences("shade", Context.MODE_PRIVATE)
 
-    fun tintPercent(c: Context) =
-        c.getSharedPreferences(FILE, 0).getInt("tint_percent", 58).coerceIn(0, 100)
+    /** Grey tint strength, 0..80 percent. */
+    fun tint(c: Context) = sp(c).getInt("tint", 35).coerceIn(0, 80)
+    fun setTint(c: Context, v: Int) = sp(c).edit().putInt("tint", v.coerceIn(0, 80)).apply()
 
-    fun setTintPercent(c: Context, v: Int) {
-        c.getSharedPreferences(FILE, 0).edit()
-            .putInt("tint_percent", v.coerceIn(0, 100)).apply()
-    }
-
-    // 0 = soft grey, 1 = charcoal, 2 = deep black, 3 = blue-grey.
-    fun tintColor(c: Context) =
-        c.getSharedPreferences(FILE, 0).getInt("tint_color", 1).coerceIn(0, 3)
-
-    fun setTintColor(c: Context, v: Int) {
-        c.getSharedPreferences(FILE, 0).edit()
-            .putInt("tint_color", v.coerceIn(0, 3)).apply()
-    }
-
-    fun blurDp(c: Context) =
-        c.getSharedPreferences(FILE, 0).getInt("blur_dp", 24).coerceIn(0, 80)
-
-    fun setBlurDp(c: Context, v: Int) {
-        c.getSharedPreferences(FILE, 0).edit()
-            .putInt("blur_dp", v.coerceIn(0, 80)).apply()
-    }
-
-    fun blurEnabled(c: Context) =
-        c.getSharedPreferences(FILE, 0).getBoolean("blur_enabled", false)
-
-    fun setBlurEnabled(c: Context, enabled: Boolean) {
-        c.getSharedPreferences(FILE, 0).edit()
-            .putBoolean("blur_enabled", enabled).apply()
-    }
+    /** Blur strength, 0..100 (dp of blur radius). */
+    fun blur(c: Context) = sp(c).getInt("blur", 40).coerceIn(0, 100)
+    fun setBlur(c: Context, v: Int) = sp(c).edit().putInt("blur", v.coerceIn(0, 100)).apply()
 }

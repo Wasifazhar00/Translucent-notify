@@ -1,27 +1,12 @@
-# Shade Background
+# Translucent Notify
 
-Native Android experiment for OnePlus 11R (CPH2487) / OxygenOS 15–16.
+Frosted grey layer **behind** the original notification shade on OnePlus 11R (OxygenOS 16).
 
-## Setup
-1. Install the APK and open Shade Background.
-2. Allow **Display over other apps**.
-3. Open Android Accessibility settings and enable **Shade Background**.
-4. Open the notification panel.
+- One non-touchable `TYPE_APPLICATION_OVERLAY` window (layer 12) with blur-behind + grey tint.
+- Status bar (15) and notification shade (17-19) draw above it, so they stay sharp and fully usable.
+- Accessibility service only detects whether the shade is open. No notification listener, root, Shizuku or ADB.
+- No custom icons, text, cards or panels.
 
-## Current behavior (Smart Region version)
-
-Because a normal app cannot place a window *under* the SystemUI notification shade, the overlay stays on top.
-
-To reduce the impact on icons and tiles we use a **smart non-uniform tint**:
-
-- **Center area** (where notifications + Quick Settings usually sit) → much lighter / more transparent
-- **Outer edges** → stronger grey tint
-- Completely non-touchable so all gestures still work
-
-This is not perfect hole-punching, but it keeps the main content more readable than a flat full-screen blur/tint.
-
-## Platform limitation
-On modern OxygenOS a third-party app cannot force a layer below the notification shade. True under-panel blur requires root + LSPosed / SystemUI modification.
-
-## Build
-Pushes to `main` automatically trigger the GitHub Actions APK build.
+Setup: allow "Display over other apps", turn on the shade detector, adjust tint/blur.
+Limit: if OxygenOS has blur switched off, only the grey tint is shown. Shade detection is a heuristic;
+use "Capture windows" in the app to calibrate it.
