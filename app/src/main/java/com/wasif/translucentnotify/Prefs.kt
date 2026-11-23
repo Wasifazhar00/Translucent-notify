@@ -13,7 +13,7 @@ object Prefs {
     fun blur(c: Context) = sp(c).getInt("blur", 40).coerceIn(0, 100)
     fun setBlur(c: Context, v: Int) = sp(c).edit().putInt("blur", v.coerceIn(0, 100)).apply()
 
-    /** false = backdrop only over the home screen (other apps untouched). true = over every app. */
-    fun armAll(c: Context) = sp(c).getBoolean("armAll", false)
-    fun setArmAll(c: Context, v: Boolean) = sp(c).edit().putBoolean("armAll", v).apply()
+    /** Fade in/out duration in ms, 0..600. Lower = faster, 0 = instant. */
+    fun animMs(c: Context) = sp(c).getInt("animMs", 160).coerceIn(0, 600)
+    fun setAnimMs(c: Context, v: Int) = sp(c).edit().putInt("animMs", v.coerceIn(0, 600)).apply()
 }

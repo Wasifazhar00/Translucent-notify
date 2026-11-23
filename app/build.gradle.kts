@@ -9,8 +9,8 @@ android {
         applicationId = "com.wasif.translucentnotify"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "5.0.0"
+        versionCode = 10
+        versionName = "5.1.0"
     }
     buildTypes {
         release {
