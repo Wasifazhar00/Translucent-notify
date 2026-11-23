@@ -1,12 +1,10 @@
 package com.wasif.translucentnotify
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.ValueAnimator
 import android.app.Activity
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.view.Choreographer
 import android.view.View
 import android.view.WindowManager
 import kotlin.math.abs
@@ -14,20 +12,32 @@ import kotlin.math.abs
 /**
  * Translucent, non-touchable, non-focusable NORMAL activity window that exists only while the shade is
  * open. App windows are always drawn below System UI, so the shade stays sharp. Blur radius and grey
- * tint fade in/out together over a user-set duration.
+ * tint fade together over the user-set duration.
+ *
+ * The fade is driven by Choreographer (own timer), so it does NOT depend on the system's animator
+ * duration scale and the speed setting always applies.
  */
 class BackdropActivity : Activity() {
     private lateinit var content: View
-    private var animator: ValueAnimator? = null
-    private var progress = 0f
+    private lateinit var choreographer: Choreographer
+    private val frame = Choreographer.FrameCallback { step(it) }
+
+    private var progress = 0f          // 0 = off, 1 = fully frosted
+    private var running = false
+    private var from = 0f
+    private var to = 0f
+    private var startNs = 0L
+    private var durationNs = 1L
     private var finishWhenHidden = false
+
     private var blurOk = false
-    private var tintAlpha = 0      // 0..255 at full progress
-    private var blurPx = 0         // at full progress
+    private var tintAlpha = 0          // 0..255 at full progress
+    private var blurPx = 0             // at full progress
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         instance = this
+        choreographer = Choreographer.getInstance()
 
         window.addFlags(
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -72,37 +82,53 @@ class BackdropActivity : Activity() {
         }
     }
 
-    /** Fade out, then finish so nothing is left behind. */
+    /** Fade out, then finish so nothing is left behind. Safe to call repeatedly. */
     fun hideAndFinish() {
         runOnUiThread {
-            if (isFinishing || isDestroyed) return@runOnUiThread
+            if (isFinishing || isDestroyed || finishWhenHidden) return@runOnUiThread
             finishWhenHidden = true
             animateTo(0f)
         }
     }
 
+    // ---------- own fade timer ----------
+
     private fun animateTo(target: Float) {
-        animator?.cancel()
+        if (running && to == target) return          // already heading there: don't restart
+        stopAnim()
         val distance = abs(target - progress)
-        val duration = Prefs.animMs(this)
-        if (duration == 0 || distance == 0f) {
+        val ms = Prefs.animMs(this)
+        if (ms == 0 || distance == 0f) {
             render(target)
             settled(target)
             return
         }
-        animator = ValueAnimator.ofFloat(progress, target).apply {
-            this.duration = (duration * distance).toLong().coerceAtLeast(1L)
-            addUpdateListener { render(it.animatedValue as Float) }
-            addListener(object : AnimatorListenerAdapter() {
-                private var cancelled = false
-                override fun onAnimationCancel(animation: Animator) {
-                    cancelled = true
-                }
-                override fun onAnimationEnd(animation: Animator) {
-                    if (!cancelled) settled(target)
-                }
-            })
-            start()
+        from = progress
+        to = target
+        startNs = 0L
+        durationNs = (ms * distance * 1_000_000f).toLong().coerceAtLeast(1L)
+        running = true
+        choreographer.postFrameCallback(frame)
+    }
+
+    private fun step(frameTimeNanos: Long) {
+        if (!running) return
+        if (startNs == 0L) startNs = frameTimeNanos
+        val t = ((frameTimeNanos - startNs).toFloat() / durationNs).coerceIn(0f, 1f)
+        val eased = t * t * (3f - 2f * t)            // smoothstep: same style in and out
+        render(from + (to - from) * eased)
+        if (t < 1f) {
+            choreographer.postFrameCallback(frame)
+        } else {
+            running = false
+            settled(to)
+        }
+    }
+
+    private fun stopAnim() {
+        if (running) {
+            choreographer.removeFrameCallback(frame)
+            running = false
         }
     }
 
@@ -124,14 +150,13 @@ class BackdropActivity : Activity() {
     }
 
     override fun finish() {
-        animator?.cancel()
+        stopAnim()
         super.finish()
         overridePendingTransition(0, 0)
     }
 
     override fun onDestroy() {
-        animator?.cancel()
-        animator = null
+        stopAnim()
         if (instance === this) instance = null
         super.onDestroy()
     }

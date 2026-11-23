@@ -24,6 +24,8 @@ import android.view.accessibility.AccessibilityWindowInfo
  * Shade opens  -> start BackdropActivity (a normal app window, always below the shade). Starting an
  *                 activity collapses the shade, so it is re-opened right away.
  * Shade closes -> BackdropActivity fades out and finishes; nothing is left behind.
+ * While the backdrop exists the state is re-checked every POLL_MS (events alone can arrive late or not
+ * at all after the shade collapses). With no backdrop there is no polling.
  * Lock screen, the moments after unlock, screen off, fingerprint popups: ignored.
  */
 class ShadeBlurService : AccessibilityService() {
@@ -37,6 +39,7 @@ class ShadeBlurService : AccessibilityService() {
     private var previewUntil = 0L
     private var lastLaunch = 0L
     private var unlockedAt = 0L
+    private var awaitingReopenUntil = 0L
     private var wasLocked = false
     private var reopenPending = false
     private var lastSysUiClass: String? = null
@@ -93,6 +96,7 @@ class ShadeBlurService : AccessibilityService() {
         val state = if (suppressed(now)) Sys.OTHER else classify()
         when {
             state == Sys.SHADE -> {
+                awaitingReopenUntil = 0L
                 active = true
                 val backdrop = BackdropActivity.instance
                 if (backdrop != null) {
@@ -106,12 +110,20 @@ class ShadeBlurService : AccessibilityService() {
             }
             state == Sys.NONE && reopenPending -> {
                 reopenPending = false
+                awaitingReopenUntil = now + REOPEN_WAIT_MS
                 performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)   // bring the shade back over the backdrop
             }
+            state == Sys.NONE && now < awaitingReopenUntil -> Unit  // waiting for the shade to come back
             else -> {
                 reopenPending = false
+                awaitingReopenUntil = 0L
                 release()
             }
+        }
+        // Poll only while there is something on screen to take down.
+        if (BackdropActivity.instance != null || reopenPending || now < awaitingReopenUntil) {
+            main.removeCallbacks(check)
+            main.postDelayed(check, POLL_MS)
         }
     }
 
@@ -222,7 +234,7 @@ class ShadeBlurService : AccessibilityService() {
         val r = Rect()
         val sb = StringBuilder(
             "class=${classify()} sysUiClass=$lastSysUiClass backdrop=${BackdropActivity.instance != null} " +
-                "locked=${keyguard.isKeyguardLocked} reopenPending=$reopenPending\n"
+                "locked=${keyguard.isKeyguardLocked} reopenPending=$reopenPending animMs=${Prefs.animMs(this)}\n"
         )
         windows.sortedByDescending { it.layer }.forEach { w ->
             w.getBoundsInScreen(r)
@@ -236,8 +248,10 @@ class ShadeBlurService : AccessibilityService() {
     companion object {
         @Volatile var instance: ShadeBlurService? = null
         private const val SYSTEMUI = "com.android.systemui"
+        private const val POLL_MS = 80L
         private const val LAUNCH_GAP_MS = 800L
         private const val PENDING_TIMEOUT_MS = 1000L
+        private const val REOPEN_WAIT_MS = 700L
         private const val ANCHOR_TIMEOUT_MS = 1500L
         private const val UNLOCK_GUARD_MS = 1200L
         private val SHADE_HINTS = listOf("shade", "quick settings", "quicksettings", "notification panel", "notificationpanel")
