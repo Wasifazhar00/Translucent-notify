@@ -22,7 +22,9 @@ import android.view.accessibility.AccessibilityWindowInfo
  * and the service only gets events from System UI (never from other apps).
  *
  * Shade opens  -> start BackdropActivity (a normal app window, always below the shade). Starting an
- *                 activity collapses the shade, so it is re-opened right away.
+ *                 activity may collapse the shade; if it does, it is re-opened right away. If the shade
+ *                 is still open shortly after the backdrop is ready, it survived: no re-open is armed,
+ *                 so a user closing it afterwards is never undone.
  * Shade closes -> BackdropActivity fades out and finishes; nothing is left behind.
  * While the backdrop exists the state is re-checked every POLL_MS (events alone can arrive late or not
  * at all after the shade collapses). With no backdrop there is no polling.
@@ -38,6 +40,7 @@ class ShadeBlurService : AccessibilityService() {
     private var anchor: View? = null
     private var previewUntil = 0L
     private var lastLaunch = 0L
+    private var resumedAt = 0L
     private var unlockedAt = 0L
     private var awaitingReopenUntil = 0L
     private var wasLocked = false
@@ -101,8 +104,13 @@ class ShadeBlurService : AccessibilityService() {
                 val backdrop = BackdropActivity.instance
                 if (backdrop != null) {
                     backdrop.setActive(true)
+                    // Shade still open well after the backdrop came up: it was NOT collapsed by the
+                    // launch (e.g. empty notification list), so never re-open it later.
+                    if (reopenPending && resumedAt > lastLaunch && now - resumedAt > SURVIVE_MS) {
+                        reopenPending = false
+                    }
                 } else if (now - lastLaunch > LAUNCH_GAP_MS) {
-                    reopenPending = true                    // the launch collapses the shade: re-open it
+                    reopenPending = true                    // the launch may collapse the shade: re-open it
                     main.removeCallbacks(clearPending)
                     main.postDelayed(clearPending, PENDING_TIMEOUT_MS)
                     launchBackdrop()
@@ -133,7 +141,10 @@ class ShadeBlurService : AccessibilityService() {
         BackdropActivity.instance?.hideAndFinish()
     }
 
-    fun onBackdropResumed() = removeAnchor()
+    fun onBackdropResumed() {
+        resumedAt = SystemClock.uptimeMillis()
+        removeAnchor()
+    }
 
     /** Screen off, lock screen, or the moments right after unlock: never show the blur. */
     private fun suppressed(now: Long): Boolean {
@@ -249,8 +260,9 @@ class ShadeBlurService : AccessibilityService() {
         @Volatile var instance: ShadeBlurService? = null
         private const val SYSTEMUI = "com.android.systemui"
         private const val POLL_MS = 80L
+        private const val SURVIVE_MS = 300L          // shade still open this long after backdrop is up = it survived
         private const val LAUNCH_GAP_MS = 800L
-        private const val PENDING_TIMEOUT_MS = 1000L
+        private const val PENDING_TIMEOUT_MS = 800L
         private const val REOPEN_WAIT_MS = 700L
         private const val ANCHOR_TIMEOUT_MS = 1500L
         private const val UNLOCK_GUARD_MS = 1200L
