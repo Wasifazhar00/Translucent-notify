@@ -11,8 +11,8 @@ import kotlin.math.abs
 
 /**
  * Translucent, non-touchable, non-focusable NORMAL activity window that exists only while the shade is
- * open. App windows are always drawn below System UI, so the shade stays sharp. Blur radius and grey
- * tint fade together over the user-set duration.
+ * open. App windows are always drawn below System UI, so the shade stays sharp. Blur radius, tint colour
+ * and darkening fade together over the user-set duration.
  *
  * The fade is driven by Choreographer (own timer), so it does NOT depend on the system's animator
  * duration scale and the speed setting always applies.
@@ -31,7 +31,9 @@ class BackdropActivity : Activity() {
     private var finishWhenHidden = false
 
     private var blurOk = false
+    private var rgb = Color.GRAY       // tint colour
     private var tintAlpha = 0          // 0..255 at full progress
+    private var dimAlpha = 0           // 0..255 at full progress
     private var blurPx = 0             // at full progress
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,7 +77,9 @@ class BackdropActivity : Activity() {
             if (isFinishing || isDestroyed) return@runOnUiThread
             finishWhenHidden = false
             if (on) {
+                rgb = Prefs.rgb(this)
                 tintAlpha = 255 * Prefs.tint(this) / 100
+                dimAlpha = 255 * Prefs.dim(this) / 100
                 blurPx = (Prefs.blur(this) * resources.displayMetrics.density).toInt()
             }
             animateTo(if (on) 1f else 0f)
@@ -138,7 +142,7 @@ class BackdropActivity : Activity() {
 
     private fun render(p: Float) {
         progress = p
-        content.setBackgroundColor(Color.argb((tintAlpha * p).toInt(), 128, 128, 128))
+        content.setBackgroundColor(Frost.color(rgb, tintAlpha, dimAlpha, p))
         if (blurOk) {
             val radius = (blurPx * p).toInt()
             val a = window.attributes
