@@ -1,17 +1,14 @@
-name: Build APK
+name: Build release APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build installable debug APK
+    name: Build signed release APK
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -39,13 +36,49 @@ jobs:
           sdkmanager --licenses
           sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Build APK
-        run: gradle --no-daemon assembleDebug
+      - name: Restore signing key cache
+        uses: actions/cache@v4
+        with:
+          path: release.keystore
+          key: signing-key-v1
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          SECRET_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SECRET_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+            echo "KEYSTORE_PASSWORD=$SECRET_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$SECRET_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$SECRET_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            P="translucent-notify-release"
+            if [ ! -f release.keystore ]; then
+              keytool -genkeypair -keystore release.keystore -alias release \
+                -keyalg RSA -keysize 2048 -validity 36500 \
+                -storepass "$P" -keypass "$P" \
+                -dname "CN=Translucent Notify, O=Wasif Azhar, C=PK"
+            fi
+            echo "KEYSTORE_PASSWORD=$P" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=release" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$P" >> "$GITHUB_ENV"
+          fi
+          echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        run: gradle --no-daemon assembleRelease
+
+      - name: Check APK signature
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: translucent-notify-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: translucent-notify-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
