@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="a11y_description">Only detects when the notification shade is open or closed so a blur layer can be shown behind it. It does not read, store or send any screen content and does not touch gestures.</string>
+    <string name="shortcut_toggle">Glass on/off</string>
+    <string name="shortcut_toggle_long">Turn the glass detector on or off</string>
 </resources>

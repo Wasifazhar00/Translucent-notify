@@ -56,19 +56,11 @@ object Prefs {
     fun dimQs(c: Context) = sp(c).getInt("dimQs", 0).coerceIn(0, 50)
     fun setDimQs(c: Context, v: Int) = sp(c).edit().putInt("dimQs", v.coerceIn(0, 50)).apply()
 
-    // ---- owner mode ----
+    // ---- protected apps ----
 
-    /** Keep the detector switched on by itself (needs the owner-mode permission). */
-    fun ownerAuto(c: Context) = sp(c).getBoolean("ownerAuto", true)
-    fun setOwnerAuto(c: Context, v: Boolean) = sp(c).edit().putBoolean("ownerAuto", v).apply()
-
-    /** Pause the detector while one of the protected apps opens, resume later. */
-    fun autoPause(c: Context) = sp(c).getBoolean("autoPause", false)
-    fun setAutoPause(c: Context, v: Boolean) = sp(c).edit().putBoolean("autoPause", v).apply()
-
-    /** Minutes until the detector resumes by itself after an automatic pause, 1..60. */
-    fun pauseMin(c: Context) = sp(c).getInt("pauseMin", 10).coerceIn(1, 60)
-    fun setPauseMin(c: Context, v: Int) = sp(c).edit().putInt("pauseMin", v.coerceIn(1, 60)).apply()
+    /** Switch the detector off by itself when one of the protected apps opens. */
+    fun autoOff(c: Context) = sp(c).getBoolean("autoOff", false)
+    fun setAutoOff(c: Context, v: Boolean) = sp(c).edit().putBoolean("autoOff", v).apply()
 
     fun protectedApps(c: Context): Set<String> = sp(c).getStringSet("protected", emptySet()) ?: emptySet()
     fun setProtectedApps(c: Context, s: Set<String>) =

@@ -35,7 +35,6 @@ class MainActivity : Activity() {
     private lateinit var overlayStatus: TextView
     private lateinit var a11yStatus: TextView
     private lateinit var blurStatus: TextView
-    private lateinit var ownerStatus: TextView
     private lateinit var appsLabel: TextView
     private lateinit var dumpView: TextView
     private lateinit var profileButton: Button
@@ -78,13 +77,29 @@ class MainActivity : Activity() {
             .apply { setPadding(0, dp(18), 0, 0) })
         a11yStatus = label("", 13, MUTED, false)
         page.addView(a11yStatus)
-        page.addView(button("Open accessibility settings") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        page.addView(button("Turn detector ON (opens its switch)") { Detector.openEnablePage(this) })
+        page.addView(button("Turn detector OFF now") {
+            if (Detector.turnOff(this, "Turned off in the app")) {
+                toast("Detector off.")
+                main.postDelayed({ refreshStatus() }, 600)
+            } else toast("The detector is already off.")
         })
         page.addView(label(
             "If a switch is greyed out: Settings > Apps > Translucent Notify > three-dot menu > Allow restricted settings.",
             12, HINT, false
         ).apply { setPadding(0, dp(8), 0, 0) })
+
+        // ---- one-tap controls ----
+        page.addView(label("One-tap on / off", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(6)) })
+        page.addView(label(
+            "Android lets an app switch its own detector OFF instantly, but only YOU can switch it back ON (one tap on its switch page). These shortcuts take you straight there:\n\n" +
+                "\u2022 Quick Settings tile: pull the shade, tap the pencil/edit icon, drag \"Glass blur\" in. Detector on: tap = off. Detector off: tap = opens the switch.\n" +
+                "\u2022 Home-screen widget (optional): long-press the home screen > Widgets > \"Glass blur\".\n" +
+                "\u2022 App icon shortcut: long-press this app's icon > \"Glass on/off\".\n" +
+                "\u2022 Notification: when the detector switches itself off, a notification appears; tap it to turn the detector on again.\n" +
+                "\u2022 Android's own shortcut: Settings > Accessibility > choose a shortcut (volume keys or accessibility button) > \"Translucent Notify shade detector\". One press toggles it on or off. Menu names vary on OxygenOS.",
+            12, MUTED, false
+        ))
 
         // ---- look ----
         page.addView(label("Glass look", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(8)) })
@@ -163,81 +178,34 @@ class MainActivity : Activity() {
             else s.preview()
         })
 
-        // ---- owner mode ----
-        page.addView(label("Owner mode", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(6)) })
+        // ---- banking / protected apps ----
+        page.addView(label("Banking and protected apps", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(6)) })
         page.addView(label(
-            "For your own phone. One-time setup lets this app switch its own detector on and off. Then it can: turn the detector back on by itself (boot, update, app open), revive it if the system stopped it, and pause it while a banking app is open.\n\n" +
-                "Run this once from a computer (or a wireless-debugging app on the phone):",
-            12, MUTED, false
-        ))
-        page.addView(label(
-            "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS",
-            12, ACCENT, false
-        ).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true); setPadding(0, dp(8), 0, dp(4)) })
-        ownerStatus = label("", 13, MUTED, false)
-        page.addView(ownerStatus)
-
-        page.addView(Switch(this).apply {
-            text = "Keep the detector switched on by itself"
-            setTextColor(Color.WHITE)
-            isChecked = Prefs.ownerAuto(this@MainActivity)
-            setOnCheckedChangeListener { _, on -> Prefs.setOwnerAuto(this@MainActivity, on) }
-        })
-        page.addView(button("Revive detector now") {
-            if (OwnerMode.granted(this)) {
-                OwnerMode.revive(this)
-                toast("Detector restarted.")
-                main.postDelayed({ refreshStatus() }, 900)
-            } else toast("Owner mode is not set up yet.")
-        })
-
-        page.addView(label("Banking and protected apps", 16, Color.WHITE, true).apply { setPadding(0, dp(18), 0, 0) })
-        page.addView(label(
-            "Banking and wallet apps may refuse to run while ANY accessibility service is on. This app does not hide from those checks. Instead it really switches the detector off for them.\n\n" +
-                "The automatic pause starts when a protected app opens. An app that checks only in its first split second can still complain: then use the Quick Settings tile or the shortcut to switch the detector off BEFORE opening it.",
+            "Banking and wallet apps may refuse to run while ANY accessibility service is on. This app does not hide from those checks. Instead the detector really switches itself off when you open an app you choose here.\n\n" +
+                "It switches off right as the app opens. An app that checks only in its very first split second can still complain once: then switch the detector off BEFORE opening it (tile, widget, shortcut). Turn it back on afterwards with the notification or the same shortcuts.",
             12, MUTED, false
         ))
         appsLabel = label("", 13, ACCENT, true)
         page.addView(appsLabel)
         page.addView(button("Choose protected apps") { pickApps() })
         page.addView(Switch(this).apply {
-            text = "Pause automatically when a protected app opens"
+            text = "Switch the detector off when a protected app opens"
             setTextColor(Color.WHITE)
-            isChecked = Prefs.autoPause(this@MainActivity)
-            setOnCheckedChangeListener { _, on -> Prefs.setAutoPause(this@MainActivity, on) }
+            isChecked = Prefs.autoOff(this@MainActivity)
+            setOnCheckedChangeListener { _, on -> Prefs.setAutoOff(this@MainActivity, on) }
         })
-        page.addView(label("Resume by itself after", 14, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
-        page.addView(slider(60, Prefs.pauseMin(this), " min") { Prefs.setPauseMin(this, it.coerceAtLeast(1)) }.row)
-        page.addView(label("You can also resume by tapping the \"Glass detector paused\" notification.", 12, HINT, false))
-        page.addView(button("Pause detector now") {
-            if (OwnerMode.granted(this)) {
-                OwnerMode.pause(this, "Paused from the app", null)
-                toast("Detector paused. Your banking app can be opened now.")
-            } else {
-                val s = ShadeBlurService.instance
-                if (s == null) toast("The detector is already off.")
-                else {
-                    s.disableSelf()
-                    toast("Detector paused. Switch it on again in Accessibility settings.")
-                }
-            }
-            main.postDelayed({ refreshStatus() }, 600)
-        })
-        page.addView(label(
-            "Quick Settings tile: pull the shade, tap the pencil/edit icon, and drag \"Glass blur\" into your tiles. One tap = detector off, another tap = on (needs owner mode).",
-            12, HINT, false
-        ).apply { setPadding(0, dp(8), 0, 0) })
 
-        page.addView(label("Keep it alive", 16, Color.WHITE, true).apply { setPadding(0, dp(18), 0, 0) })
+        // ---- keep alive ----
+        page.addView(label("Keep it alive", 16, Color.WHITE, true).apply { setPadding(0, dp(22), 0, 0) })
         page.addView(label(
-            "If the glass sometimes does not appear, OxygenOS may have stopped the detector to save battery. Allow background use, and allow notifications for the pause notice.",
+            "If the glass sometimes does not appear, OxygenOS may have stopped the detector to save battery. Allow background use for this app. If it still stops, switch the detector off and on again (tile, widget or shortcut).",
             12, MUTED, false
         ))
         page.addView(button("Allow background use (battery)") {
             runCatching {
                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
             }.onFailure {
-                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
             }
         })
         page.addView(button("Allow notifications") {
@@ -268,17 +236,6 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refreshStatus()
-        // Owner mode: switch the detector on if it is off, or restart it if it is on but not running.
-        if (Prefs.ownerAuto(this) && OwnerMode.granted(this)) {
-            if (!OwnerMode.isEnabled(this)) {
-                OwnerMode.setEnabled(this, true)
-            } else {
-                main.postDelayed({
-                    if (OwnerMode.isEnabled(this) && ShadeBlurService.instance == null) OwnerMode.revive(this)
-                }, 1800)
-            }
-            main.postDelayed({ refreshStatus() }, 2500)
-        }
     }
 
     override fun onDestroy() {
@@ -289,17 +246,15 @@ class MainActivity : Activity() {
     // ---------- status ----------
 
     private fun refreshStatus() {
-        val a11y = OwnerMode.isEnabled(this)
         status(overlayStatus, Settings.canDrawOverlays(this), "ON", "OFF - allow it")
-        status(a11yStatus, a11y, "ON", "OFF - turn on \"Translucent Notify shade detector\"")
+        val enabled = Detector.isEnabled(this)
+        status(a11yStatus, enabled, "ON", "OFF - tap \"Turn detector ON\" below")
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         blurStatus.text = when {
             Build.VERSION.SDK_INT < 31 -> "Blur: not supported (Android 12+ needed). Tint only."
             wm.isCrossWindowBlurEnabled -> "Blur: supported on this device."
             else -> "Blur: switched off by the system right now (battery saver, developer option or OEM setting). Tint only."
         }
-        val owner = OwnerMode.granted(this)
-        status(ownerStatus, owner, "Owner mode: READY", "Owner mode: not set up (needs the one-time command above)")
         val n = Prefs.protectedApps(this).size
         appsLabel.text = if (n == 0) "No protected apps chosen" else "$n protected app(s) chosen"
     }

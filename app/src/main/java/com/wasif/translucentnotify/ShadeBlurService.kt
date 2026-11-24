@@ -2,6 +2,7 @@ package com.wasif.translucentnotify
 
 import android.accessibilityservice.AccessibilityService
 import android.app.KeyguardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
@@ -11,6 +12,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
+import android.service.quicksettings.TileService
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -19,7 +21,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 
 /**
  * On-demand blur behind the notification shade. Idle = nothing: no window, no overlay, no receivers,
- * and the service only gets events from System UI (plus the few apps the owner marked as protected).
+ * and the service only gets events from System UI (plus the few apps marked as protected).
  *
  * Shade opens  -> start BackdropActivity (a normal app window, always below the shade). Starting an
  *                 activity may collapse the shade; if it does, it is re-opened right away. If the shade
@@ -27,6 +29,7 @@ import android.view.accessibility.AccessibilityWindowInfo
  * Shade closes -> BackdropActivity fades out and finishes; nothing is left behind.
  * While the backdrop exists the state is re-checked every POLL_MS. With no backdrop there is no polling.
  * Lock screen, the moments after unlock, screen off, fingerprint popups: ignored.
+ * A protected app opening switches this service off by itself (disableSelf).
  */
 class ShadeBlurService : AccessibilityService() {
     private enum class Sys { NONE, SHADE, OTHER }
@@ -61,9 +64,11 @@ class ShadeBlurService : AccessibilityService() {
         power = getSystemService(Context.POWER_SERVICE) as PowerManager
         keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         refreshWatched()
+        Detector.clearNotice(this)
+        announceState()
     }
 
-    /** Listen to System UI plus the protected apps (so they can trigger an automatic pause). */
+    /** Listen to System UI plus the protected apps (so they can trigger the automatic switch-off). */
     fun refreshWatched() {
         val info = serviceInfo ?: return
         info.packageNames = (listOf(SYSTEMUI) + Prefs.protectedApps(this)).toTypedArray()
@@ -75,11 +80,11 @@ class ShadeBlurService : AccessibilityService() {
         lastEventAt = SystemClock.uptimeMillis()
         val pkg = event.packageName?.toString()
         if (pkg != null && pkg != SYSTEMUI) {
-            // Only protected apps reach this point. Opening one pauses the detector (owner mode).
+            // Only protected apps reach this point: opening one switches the detector off.
             if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-                Prefs.autoPause(this) && pkg in Prefs.protectedApps(this)
+                Prefs.autoOff(this) && pkg in Prefs.protectedApps(this)
             ) {
-                OwnerMode.pause(this, "Paused for a protected app", Prefs.pauseMin(this))
+                Detector.turnOff(this, "Switched off for a protected app")
             }
             return
         }
@@ -109,6 +114,17 @@ class ShadeBlurService : AccessibilityService() {
         BackdropActivity.instance?.finish()
         removeAnchor()
         if (instance === this) instance = null
+        announceState()
+    }
+
+    /** Tell the widget and the tile that the detector started or stopped. */
+    private fun announceState() {
+        runCatching { GlassWidget.refresh(applicationContext) }
+        runCatching {
+            TileService.requestListeningState(
+                applicationContext, ComponentName(applicationContext, DetectorTile::class.java)
+            )
+        }
     }
 
     // ---------- main logic ----------
