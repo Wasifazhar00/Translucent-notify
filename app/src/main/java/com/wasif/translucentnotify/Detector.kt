@@ -36,11 +36,10 @@ object Detector {
         val newTask = Intent.FLAG_ACTIVITY_NEW_TASK
         if (Build.VERSION.SDK_INT >= 31) {
             val opened = runCatching {
-                c.startActivity(
-                    Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
-                        .putExtra(Intent.EXTRA_COMPONENT_NAME, component(c).flattenToString())
-                        .addFlags(newTask)
-                )
+                val details = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
+                    .putExtra(Intent.EXTRA_COMPONENT_NAME, component(c))
+                    .addFlags(newTask)
+                c.startActivity(details)
             }.isSuccess
             if (opened) return
         }
@@ -82,3 +81,4 @@ object Detector {
         (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTICE_ID)
     }
 }
+
