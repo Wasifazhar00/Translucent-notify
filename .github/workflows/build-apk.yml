@@ -32,8 +32,10 @@ jobs:
           packages: ''
 
       - name: Install Android SDK platform and build tools
+        shell: bash
         run: |
-          sdkmanager --licenses
+          set -euo pipefail
+          yes | sdkmanager --licenses
           sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
 
       - name: Restore signing key cache
@@ -48,15 +50,18 @@ jobs:
           SECRET_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           SECRET_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           SECRET_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        shell: bash
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+          set -euo pipefail
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > release.keystore
+            test -s release.keystore
             echo "KEYSTORE_PASSWORD=$SECRET_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
             echo "KEY_ALIAS=$SECRET_KEY_ALIAS" >> "$GITHUB_ENV"
             echo "KEY_PASSWORD=$SECRET_KEY_PASSWORD" >> "$GITHUB_ENV"
           else
             P="translucent-notify-release"
-            if [ ! -f release.keystore ]; then
+            if [ ! -s release.keystore ]; then
               keytool -genkeypair -keystore release.keystore -alias release \
                 -keyalg RSA -keysize 2048 -validity 36500 \
                 -storepass "$P" -keypass "$P" \
@@ -69,10 +74,11 @@ jobs:
           echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/release.keystore" >> "$GITHUB_ENV"
 
       - name: Build release APK
-        run: gradle --no-daemon assembleRelease
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
 
       - name: Check APK signature
         run: |
+          test -s app/build/outputs/apk/release/app-release.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk
 
       - name: Upload APK artifact
