@@ -28,10 +28,13 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
-class MainActivity : Activity() {
-    private class Slider(val row: LinearLayout, val bar: SeekBar)
-    private class Preset(val name: String, val hue: Int, val sat: Int, val bright: Int)
+/** A slider row: the label + bar view, and the bar itself so presets can move it. */
+class SliderRow(val row: LinearLayout, val bar: SeekBar)
 
+/** One colour preset button. */
+class ColourPreset(val name: String, val hue: Int, val sat: Int, val bright: Int)
+
+class MainActivity : Activity() {
     private lateinit var overlayStatus: TextView
     private lateinit var a11yStatus: TextView
     private lateinit var blurStatus: TextView
@@ -39,11 +42,11 @@ class MainActivity : Activity() {
     private lateinit var dumpView: TextView
     private lateinit var profileButton: Button
     private lateinit var previewTint: View
-    private lateinit var hue: Slider
-    private lateinit var sat: Slider
-    private lateinit var bright: Slider
-    private lateinit var tint: Slider
-    private lateinit var dim: Slider
+    private lateinit var hue: SliderRow
+    private lateinit var sat: SliderRow
+    private lateinit var bright: SliderRow
+    private lateinit var tint: SliderRow
+    private lateinit var dim: SliderRow
     private val main = Handler(Looper.getMainLooper())
     private var night = false          // which glass profile the sliders are editing
 
@@ -82,7 +85,9 @@ class MainActivity : Activity() {
             if (Detector.turnOff(this, "Turned off in the app")) {
                 toast("Detector off.")
                 main.postDelayed({ refreshStatus() }, 600)
-            } else toast("The detector is already off.")
+            } else {
+                toast("The detector is already off.")
+            }
         })
         page.addView(label(
             "If a switch is greyed out: Settings > Apps > Translucent Notify > three-dot menu > Allow restricted settings.",
@@ -105,24 +110,28 @@ class MainActivity : Activity() {
         page.addView(label("Glass look", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(8)) })
 
         page.addView(label("Preview (over a sample picture)", 12, HINT, false))
-        val previewBox = FrameLayout(this).apply {
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xFFFF8A3D.toInt(), 0xFF2E6BFF.toInt(), 0xFF1DB954.toInt())
-            ).apply { cornerRadius = dp(14).toFloat() }
-        }
+        val previewBox = FrameLayout(this)
+        previewBox.background = GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            intArrayOf(0xFFFF8A3D.toInt(), 0xFF2E6BFF.toInt(), 0xFF1DB954.toInt())
+        ).apply { cornerRadius = dp(14).toFloat() }
         previewTint = View(this)
-        previewBox.addView(previewTint, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        page.addView(previewBox, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(90)).apply { topMargin = dp(6); bottomMargin = dp(10) })
+        previewBox.addView(
+            previewTint,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        val previewParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(90))
+        previewParams.topMargin = dp(6)
+        previewParams.bottomMargin = dp(10)
+        page.addView(previewBox, previewParams)
 
-        page.addView(Switch(this).apply {
-            text = "Auto day / night glass (follow the phone's dark mode)"
-            setTextColor(Color.WHITE)
-            isChecked = Prefs.autoTheme(this@MainActivity)
-            setOnCheckedChangeListener { _, on -> Prefs.setAutoTheme(this@MainActivity, on) }
-        })
+        val autoTheme = Switch(this)
+        autoTheme.text = "Auto day / night glass (follow the phone's dark mode)"
+        autoTheme.setTextColor(Color.WHITE)
+        autoTheme.isChecked = Prefs.autoTheme(this)
+        autoTheme.setOnCheckedChangeListener { _, on -> Prefs.setAutoTheme(this, on) }
+        page.addView(autoTheme)
+
         profileButton = button("") {
             night = !night
             loadProfile()
@@ -130,33 +139,49 @@ class MainActivity : Activity() {
         page.addView(profileButton)
 
         page.addView(label("Colour presets", 14, Color.WHITE, true))
-        page.addView(HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                PRESETS.forEach { addView(swatch(it)) }
-            })
-        })
+        val presetRow = LinearLayout(this)
+        presetRow.orientation = LinearLayout.HORIZONTAL
+        for (p in PRESETS) presetRow.addView(swatch(p))
+        val presetScroll = HorizontalScrollView(this)
+        presetScroll.isHorizontalScrollBarEnabled = false
+        presetScroll.addView(presetRow)
+        page.addView(presetScroll)
 
         page.addView(label("Hue", 14, Color.WHITE, true).apply { setPadding(0, dp(10), 0, 0) })
-        hue = slider(360, Prefs.hue(this, night), "\u00B0") { Prefs.setHue(this, it, night); refreshPreview() }
+        hue = slider(360, Prefs.hue(this, night), "\u00B0") { v ->
+            Prefs.setHue(this, v, night)
+            refreshPreview()
+        }
         page.addView(hue.row)
         page.addView(label("Colour strength (saturation)", 14, Color.WHITE, true))
-        sat = slider(100, Prefs.sat(this, night), "%") { Prefs.setSat(this, it, night); refreshPreview() }
+        sat = slider(100, Prefs.sat(this, night), "%") { v ->
+            Prefs.setSat(this, v, night)
+            refreshPreview()
+        }
         page.addView(sat.row)
         page.addView(label("Colour lightness", 14, Color.WHITE, true))
-        bright = slider(100, Prefs.bright(this, night), "%") { Prefs.setBright(this, it, night); refreshPreview() }
+        bright = slider(100, Prefs.bright(this, night), "%") { v ->
+            Prefs.setBright(this, v, night)
+            refreshPreview()
+        }
         page.addView(bright.row)
 
         page.addView(label("Tint amount", 14, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
-        tint = slider(80, Prefs.tint(this, night), "%") { Prefs.setTint(this, it, night); refreshPreview() }
+        tint = slider(80, Prefs.tint(this, night), "%") { v ->
+            Prefs.setTint(this, v, night)
+            refreshPreview()
+        }
         page.addView(tint.row)
         page.addView(label("Darkness (black layer)", 14, Color.WHITE, true))
-        dim = slider(70, Prefs.dim(this, night), "%") { Prefs.setDim(this, it, night); refreshPreview() }
+        dim = slider(70, Prefs.dim(this, night), "%") { v ->
+            Prefs.setDim(this, v, night)
+            refreshPreview()
+        }
         page.addView(dim.row)
 
         page.addView(label("Blur", 14, Color.WHITE, true))
-        page.addView(slider(100, Prefs.blur(this), "") { Prefs.setBlur(this, it) }.row)
+        val blurRow = slider(100, Prefs.blur(this), "") { v -> Prefs.setBlur(this, v) }
+        page.addView(blurRow.row)
         blurStatus = label("", 12, HINT, false)
         page.addView(blurStatus)
 
@@ -165,11 +190,13 @@ class MainActivity : Activity() {
             "Added on top while the Quick Settings tiles are showing. Experimental: it works only if the phone reports the Quick Settings page (see Calibration).",
             12, HINT, false
         ))
-        page.addView(slider(50, Prefs.dimQs(this), "%") { Prefs.setDimQs(this, it) }.row)
+        val qsRow = slider(50, Prefs.dimQs(this), "%") { v -> Prefs.setDimQs(this, v) }
+        page.addView(qsRow.row)
 
         page.addView(label("Animation duration", 14, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
         page.addView(label("Lower = faster. 0 = instant. Applies to fade in and fade out.", 12, HINT, false))
-        page.addView(slider(600, Prefs.animMs(this), " ms") { Prefs.setAnimMs(this, it) }.row)
+        val animRow = slider(600, Prefs.animMs(this), " ms") { v -> Prefs.setAnimMs(this, v) }
+        page.addView(animRow.row)
 
         page.addView(button("Test glass (5 seconds)") {
             val s = ShadeBlurService.instance
@@ -188,12 +215,12 @@ class MainActivity : Activity() {
         appsLabel = label("", 13, ACCENT, true)
         page.addView(appsLabel)
         page.addView(button("Choose protected apps") { pickApps() })
-        page.addView(Switch(this).apply {
-            text = "Switch the detector off when a protected app opens"
-            setTextColor(Color.WHITE)
-            isChecked = Prefs.autoOff(this@MainActivity)
-            setOnCheckedChangeListener { _, on -> Prefs.setAutoOff(this@MainActivity, on) }
-        })
+        val autoOff = Switch(this)
+        autoOff.text = "Switch the detector off when a protected app opens"
+        autoOff.setTextColor(Color.WHITE)
+        autoOff.isChecked = Prefs.autoOff(this)
+        autoOff.setOnCheckedChangeListener { _, on -> Prefs.setAutoOff(this, on) }
+        page.addView(autoOff)
 
         // ---- keep alive ----
         page.addView(label("Keep it alive", 16, Color.WHITE, true).apply { setPadding(0, dp(22), 0, 0) })
@@ -202,15 +229,22 @@ class MainActivity : Activity() {
             12, MUTED, false
         ))
         page.addView(button("Allow background use (battery)") {
-            runCatching {
+            try {
                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
-            }.onFailure {
-                runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+            } catch (e: Exception) {
+                try {
+                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                } catch (e2: Exception) {
+                    toast("Open Settings > Apps > Translucent Notify > Battery and allow background use.")
+                }
             }
         })
         page.addView(button("Allow notifications") {
-            if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-            else toast("Notifications are already allowed.")
+            if (Build.VERSION.SDK_INT >= 33) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+            } else {
+                toast("Notifications are already allowed.")
+            }
         })
 
         // ---- calibration ----
@@ -221,13 +255,15 @@ class MainActivity : Activity() {
         ))
         page.addView(button("Capture windows in 4 s") {
             val s = ShadeBlurService.instance
-            if (s == null) toast("Turn on the shade detector first.")
-            else main.postDelayed({ dumpView.text = s.dumpWindows() }, 4000)
+            if (s == null) {
+                toast("Turn on the shade detector first.")
+            } else {
+                main.postDelayed({ dumpView.text = s.dumpWindows() }, 4000)
+            }
         })
-        dumpView = label("", 11, 0xFFD3DBE8.toInt(), false).apply {
-            typeface = Typeface.MONOSPACE
-            setTextIsSelectable(true)
-        }
+        dumpView = label("", 11, 0xFFD3DBE8.toInt(), false)
+        dumpView.typeface = Typeface.MONOSPACE
+        dumpView.setTextIsSelectable(true)
         page.addView(dumpView)
 
         loadProfile()
@@ -276,25 +312,27 @@ class MainActivity : Activity() {
             .sortedBy { it.second.lowercase() }
         val chosen = Prefs.protectedApps(this).toMutableSet()
         val checked = BooleanArray(apps.size) { apps[it].first in chosen }
-        AlertDialog.Builder(this)
-            .setTitle("Protected apps")
-            .setMultiChoiceItems(apps.map { it.second }.toTypedArray(), checked) { _, i, on ->
-                if (on) chosen.add(apps[i].first) else chosen.remove(apps[i].first)
-            }
-            .setPositiveButton("Save") { _, _ ->
-                Prefs.setProtectedApps(this, chosen)
-                ShadeBlurService.instance?.refreshWatched()
-                refreshStatus()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        val names = Array(apps.size) { apps[it].second }
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Protected apps")
+        builder.setMultiChoiceItems(names, checked) { _, i, on ->
+            if (on) chosen.add(apps[i].first) else chosen.remove(apps[i].first)
+        }
+        builder.setPositiveButton("Save") { _, _ ->
+            Prefs.setProtectedApps(this, chosen)
+            ShadeBlurService.instance?.refreshWatched()
+            refreshStatus()
+        }
+        builder.setNegativeButton("Cancel", null)
+        builder.show()
     }
 
     // ---------- look helpers ----------
 
     /** Show the day or night profile in the sliders. */
     private fun loadProfile() {
-        profileButton.text = if (night) "Editing: NIGHT glass (tap for day)" else "Editing: DAY glass (tap for night)"
+        profileButton.text =
+            if (night) "Editing: NIGHT glass (tap for day)" else "Editing: DAY glass (tap for night)"
         hue.bar.progress = Prefs.hue(this, night)
         sat.bar.progress = Prefs.sat(this, night)
         bright.bar.progress = Prefs.bright(this, night)
@@ -314,87 +352,99 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun swatch(p: Preset): View {
+    private fun swatch(p: ColourPreset): View {
         val color = Color.HSVToColor(floatArrayOf(p.hue.toFloat(), p.sat / 100f, p.bright / 100f))
-        return TextView(this).apply {
-            text = p.name
-            textSize = 11f
-            gravity = Gravity.CENTER
-            setTextColor(if (p.bright > 60) Color.BLACK else Color.WHITE)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(12).toFloat()
-                setColor(color)
-                setStroke(dp(1), 0x55FFFFFF)
-            }
-            setPadding(dp(14), dp(10), dp(14), dp(10))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { rightMargin = dp(8); topMargin = dp(6); bottomMargin = dp(2) }
-            setOnClickListener {
-                hue.bar.progress = p.hue       // listeners save the values and refresh the preview
-                sat.bar.progress = p.sat
-                bright.bar.progress = p.bright
-            }
+        val shape = GradientDrawable()
+        shape.shape = GradientDrawable.RECTANGLE
+        shape.cornerRadius = dp(12).toFloat()
+        shape.setColor(color)
+        shape.setStroke(dp(1), 0x55FFFFFF)
+
+        val view = TextView(this)
+        view.text = p.name
+        view.textSize = 11f
+        view.gravity = Gravity.CENTER
+        view.setTextColor(if (p.bright > 60) Color.BLACK else Color.WHITE)
+        view.background = shape
+        view.setPadding(dp(14), dp(10), dp(14), dp(10))
+        val params = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        params.rightMargin = dp(8)
+        params.topMargin = dp(6)
+        params.bottomMargin = dp(2)
+        view.layoutParams = params
+        view.setOnClickListener {
+            hue.bar.progress = p.hue       // listeners save the values and refresh the preview
+            sat.bar.progress = p.sat
+            bright.bar.progress = p.bright
         }
+        return view
     }
 
-    private fun slider(max: Int, start: Int, unit: String, onChange: (Int) -> Unit): Slider {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    private fun slider(max: Int, start: Int, unit: String, onChange: (Int) -> Unit): SliderRow {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.VERTICAL
         val value = label("$start$unit", 13, ACCENT, true)
         row.addView(value)
-        val bar = SeekBar(this).apply {
-            this.max = max
-            progress = start
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                    value.text = "$p$unit"
-                    onChange(p)
-                }
-                override fun onStartTrackingTouch(s: SeekBar?) = Unit
-                override fun onStopTrackingTouch(s: SeekBar?) = Unit
-            })
-        }
+        val bar = SeekBar(this)
+        bar.max = max
+        bar.progress = start
+        bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                value.text = "$p$unit"
+                onChange(p)
+            }
+
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+
+            override fun onStopTrackingTouch(s: SeekBar?) {}
+        })
         row.addView(bar)
-        return Slider(row, bar)
+        return SliderRow(row, bar)
     }
 
-    private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_LONG).show()
-
-    private fun label(value: String, size: Int, color: Int, bold: Boolean) =
-        TextView(this).apply {
-            text = value
-            textSize = size.toFloat()
-            setTextColor(color)
-            if (bold) typeface = Typeface.DEFAULT_BOLD
-            setLineSpacing(dp(3).toFloat(), 1f)
-        }
-
-    private fun button(text: String, action: () -> Unit) = Button(this).apply {
-        this.text = text
-        isAllCaps = false
-        setOnClickListener { action() }
+    private fun toast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun label(value: String, size: Int, color: Int, bold: Boolean): TextView {
+        val view = TextView(this)
+        view.text = value
+        view.textSize = size.toFloat()
+        view.setTextColor(color)
+        if (bold) view.typeface = Typeface.DEFAULT_BOLD
+        view.setLineSpacing(dp(3).toFloat(), 1f)
+        return view
+    }
+
+    private fun button(text: String, action: () -> Unit): Button {
+        val b = Button(this)
+        b.text = text
+        b.isAllCaps = false
+        b.setOnClickListener { action() }
+        return b
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private companion object {
-        val BG = Color.rgb(12, 17, 27)
-        const val MUTED = 0xFFB7C1D2.toInt()
-        const val HINT = 0xFF9AA8BC.toInt()
-        const val ACCENT = 0xFFB8D5FF.toInt()
-        const val GOOD = 0xFF7FCEA9.toInt()
-        const val BAD = 0xFFFFB4A8.toInt()
+        val BG: Int = Color.rgb(12, 17, 27)
+        const val MUTED: Int = -0x483E2E      // 0xFFB7C1D2
+        const val HINT: Int = -0x655743       // 0xFF9AA8BC
+        const val ACCENT: Int = -0x472A01     // 0xFFB8D5FF
+        const val GOOD: Int = -0x803132       // 0xFF7FCEA9
+        const val BAD: Int = -0x4B58          // 0xFFFFB4A8
 
-        val PRESETS = listOf(
-            Preset("Grey", 0, 0, 50),
-            Preset("Light", 0, 0, 95),
-            Preset("Dark", 0, 0, 10),
-            Preset("Blue", 215, 45, 70),
-            Preset("Green", 150, 40, 60),
-            Preset("Purple", 270, 45, 65),
-            Preset("Warm", 30, 45, 75),
-            Preset("Rose", 340, 45, 75)
+        val PRESETS: List<ColourPreset> = listOf(
+            ColourPreset("Grey", 0, 0, 50),
+            ColourPreset("Light", 0, 0, 95),
+            ColourPreset("Dark", 0, 0, 10),
+            ColourPreset("Blue", 215, 45, 70),
+            ColourPreset("Green", 150, 40, 60),
+            ColourPreset("Purple", 270, 45, 65),
+            ColourPreset("Warm", 30, 45, 75),
+            ColourPreset("Rose", 340, 45, 75)
         )
     }
 }
