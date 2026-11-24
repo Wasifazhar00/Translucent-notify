@@ -36,7 +36,7 @@ object Detector {
         val newTask = Intent.FLAG_ACTIVITY_NEW_TASK
         if (Build.VERSION.SDK_INT >= 31) {
             val opened = runCatching {
-                val details = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
+                val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
                 details.putExtra(Intent.EXTRA_COMPONENT_NAME, component(c))
                 details.addFlags(newTask)
                 c.startActivity(details)
