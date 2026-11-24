@@ -50,27 +50,35 @@ class MainActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private var night = false          // which glass profile the sliders are editing
 
+    private val bg: Int = Color.parseColor("#0C111B")
+    private val muted: Int = Color.parseColor("#B7C1D2")
+    private val hint: Int = Color.parseColor("#9AA8BC")
+    private val accent: Int = Color.parseColor("#B8D5FF")
+    private val good: Int = Color.parseColor("#7FCEA9")
+    private val bad: Int = Color.parseColor("#FFB4A8")
+    private val dumpColor: Int = Color.parseColor("#D3DBE8")
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = BG
-        window.navigationBarColor = BG
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
 
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(42), dp(24), dp(32))
-            setBackgroundColor(BG)
+            setBackgroundColor(bg)
         }
         setContentView(ScrollView(this).apply { addView(page) })
 
         page.addView(label("Translucent Notify", 28, Color.WHITE, true))
         page.addView(label(
             "Frosted glass behind the original notification shade. Idle = nothing running. It appears only when the shade opens and fades out when it closes.",
-            14, MUTED, false
+            14, muted, false
         ).apply { setPadding(0, dp(8), 0, dp(18)) })
 
         // ---- setup ----
         page.addView(label("1. Display over other apps", 16, Color.WHITE, true))
-        overlayStatus = label("", 13, MUTED, false)
+        overlayStatus = label("", 13, muted, false)
         page.addView(overlayStatus)
         page.addView(button("Allow display over other apps") {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -78,7 +86,7 @@ class MainActivity : Activity() {
 
         page.addView(label("2. Shade detector (accessibility)", 16, Color.WHITE, true)
             .apply { setPadding(0, dp(18), 0, 0) })
-        a11yStatus = label("", 13, MUTED, false)
+        a11yStatus = label("", 13, muted, false)
         page.addView(a11yStatus)
         page.addView(button("Turn detector ON (opens its switch)") { Detector.openEnablePage(this) })
         page.addView(button("Turn detector OFF now") {
@@ -91,7 +99,7 @@ class MainActivity : Activity() {
         })
         page.addView(label(
             "If a switch is greyed out: Settings > Apps > Translucent Notify > three-dot menu > Allow restricted settings.",
-            12, HINT, false
+            12, hint, false
         ).apply { setPadding(0, dp(8), 0, 0) })
 
         // ---- one-tap controls ----
@@ -103,18 +111,20 @@ class MainActivity : Activity() {
                 "\u2022 App icon shortcut: long-press this app's icon > \"Glass on/off\".\n" +
                 "\u2022 Notification: when the detector switches itself off, a notification appears; tap it to turn the detector on again.\n" +
                 "\u2022 Android's own shortcut: Settings > Accessibility > choose a shortcut (volume keys or accessibility button) > \"Translucent Notify shade detector\". One press toggles it on or off. Menu names vary on OxygenOS.",
-            12, MUTED, false
+            12, muted, false
         ))
 
         // ---- look ----
         page.addView(label("Glass look", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(8)) })
 
-        page.addView(label("Preview (over a sample picture)", 12, HINT, false))
+        page.addView(label("Preview (over a sample picture)", 12, hint, false))
         val previewBox = FrameLayout(this)
-        previewBox.background = GradientDrawable(
+        val sample = GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
-            intArrayOf(0xFFFF8A3D.toInt(), 0xFF2E6BFF.toInt(), 0xFF1DB954.toInt())
-        ).apply { cornerRadius = dp(14).toFloat() }
+            intArrayOf(Color.parseColor("#FF8A3D"), Color.parseColor("#2E6BFF"), Color.parseColor("#1DB954"))
+        )
+        sample.cornerRadius = dp(14).toFloat()
+        previewBox.background = sample
         previewTint = View(this)
         previewBox.addView(
             previewTint,
@@ -182,19 +192,19 @@ class MainActivity : Activity() {
         page.addView(label("Blur", 14, Color.WHITE, true))
         val blurRow = slider(100, Prefs.blur(this), "") { v -> Prefs.setBlur(this, v) }
         page.addView(blurRow.row)
-        blurStatus = label("", 12, HINT, false)
+        blurStatus = label("", 12, hint, false)
         page.addView(blurStatus)
 
         page.addView(label("Extra darkness on Quick Settings", 14, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
         page.addView(label(
             "Added on top while the Quick Settings tiles are showing. Experimental: it works only if the phone reports the Quick Settings page (see Calibration).",
-            12, HINT, false
+            12, hint, false
         ))
         val qsRow = slider(50, Prefs.dimQs(this), "%") { v -> Prefs.setDimQs(this, v) }
         page.addView(qsRow.row)
 
         page.addView(label("Animation duration", 14, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
-        page.addView(label("Lower = faster. 0 = instant. Applies to fade in and fade out.", 12, HINT, false))
+        page.addView(label("Lower = faster. 0 = instant. Applies to fade in and fade out.", 12, hint, false))
         val animRow = slider(600, Prefs.animMs(this), " ms") { v -> Prefs.setAnimMs(this, v) }
         page.addView(animRow.row)
 
@@ -210,9 +220,9 @@ class MainActivity : Activity() {
         page.addView(label(
             "Banking and wallet apps may refuse to run while ANY accessibility service is on. This app does not hide from those checks. Instead the detector really switches itself off when you open an app you choose here.\n\n" +
                 "It switches off right as the app opens. An app that checks only in its very first split second can still complain once: then switch the detector off BEFORE opening it (tile, widget, shortcut). Turn it back on afterwards with the notification or the same shortcuts.",
-            12, MUTED, false
+            12, muted, false
         ))
-        appsLabel = label("", 13, ACCENT, true)
+        appsLabel = label("", 13, accent, true)
         page.addView(appsLabel)
         page.addView(button("Choose protected apps") { pickApps() })
         val autoOff = Switch(this)
@@ -226,7 +236,7 @@ class MainActivity : Activity() {
         page.addView(label("Keep it alive", 16, Color.WHITE, true).apply { setPadding(0, dp(22), 0, 0) })
         page.addView(label(
             "If the glass sometimes does not appear, OxygenOS may have stopped the detector to save battery. Allow background use for this app. If it still stops, switch the detector off and on again (tile, widget or shortcut).",
-            12, MUTED, false
+            12, muted, false
         ))
         page.addView(button("Allow background use (battery)") {
             try {
@@ -251,7 +261,7 @@ class MainActivity : Activity() {
         page.addView(label("Calibration", 16, Color.WHITE, true).apply { setPadding(0, dp(22), 0, 0) })
         page.addView(label(
             "If the glass does not appear (or stays on) with the real shade, tap this, then pull the shade down within 4 seconds and keep it open. Come back here and send me the text. For Quick Settings, do it with the tiles open.",
-            12, HINT, false
+            12, hint, false
         ))
         page.addView(button("Capture windows in 4 s") {
             val s = ShadeBlurService.instance
@@ -261,7 +271,7 @@ class MainActivity : Activity() {
                 main.postDelayed({ dumpView.text = s.dumpWindows() }, 4000)
             }
         })
-        dumpView = label("", 11, 0xFFD3DBE8.toInt(), false)
+        dumpView = label("", 11, dumpColor, false)
         dumpView.typeface = Typeface.MONOSPACE
         dumpView.setTextIsSelectable(true)
         page.addView(dumpView)
@@ -297,7 +307,7 @@ class MainActivity : Activity() {
 
     private fun status(v: TextView, ok: Boolean, on: String, off: String) {
         v.text = if (ok) on else off
-        v.setTextColor(if (ok) GOOD else BAD)
+        v.setTextColor(if (ok) good else bad)
     }
 
     // ---------- protected apps ----------
@@ -358,7 +368,7 @@ class MainActivity : Activity() {
         shape.shape = GradientDrawable.RECTANGLE
         shape.cornerRadius = dp(12).toFloat()
         shape.setColor(color)
-        shape.setStroke(dp(1), 0x55FFFFFF)
+        shape.setStroke(dp(1), Color.argb(85, 255, 255, 255))
 
         val view = TextView(this)
         view.text = p.name
@@ -385,7 +395,7 @@ class MainActivity : Activity() {
     private fun slider(max: Int, start: Int, unit: String, onChange: (Int) -> Unit): SliderRow {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.VERTICAL
-        val value = label("$start$unit", 13, ACCENT, true)
+        val value = label("$start$unit", 13, accent, true)
         row.addView(value)
         val bar = SeekBar(this)
         bar.max = max
@@ -429,13 +439,6 @@ class MainActivity : Activity() {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private companion object {
-        val BG: Int = Color.rgb(12, 17, 27)
-        const val MUTED: Int = -0x483E2E      // 0xFFB7C1D2
-        const val HINT: Int = -0x655743       // 0xFF9AA8BC
-        const val ACCENT: Int = -0x472A01     // 0xFFB8D5FF
-        const val GOOD: Int = -0x803132       // 0xFF7FCEA9
-        const val BAD: Int = -0x4B58          // 0xFFFFB4A8
-
         val PRESETS: List<ColourPreset> = listOf(
             ColourPreset("Grey", 0, 0, 50),
             ColourPreset("Light", 0, 0, 95),
