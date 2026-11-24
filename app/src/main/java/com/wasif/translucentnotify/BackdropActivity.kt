@@ -1,6 +1,7 @@
 package com.wasif.translucentnotify
 
 import android.app.Activity
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -31,6 +32,7 @@ class BackdropActivity : Activity() {
     private var finishWhenHidden = false
 
     private var blurOk = false
+    private var paramsKey = 0
     private var rgb = Color.GRAY       // tint colour
     private var tintAlpha = 0          // 0..255 at full progress
     private var dimAlpha = 0           // 0..255 at full progress
@@ -71,16 +73,33 @@ class BackdropActivity : Activity() {
         ShadeBlurService.instance?.onBackdropResumed()
     }
 
-    /** Fade the frosted look in (true) or out (false). Cancels a pending finish. */
-    fun setActive(on: Boolean) {
+    private fun nightProfile(): Boolean =
+        Prefs.autoTheme(this) &&
+            (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    /**
+     * Fade the frosted look in (true) or out (false). Cancels a pending finish.
+     * [qs] = Quick Settings is showing: adds the extra Quick Settings darkness.
+     */
+    fun setActive(on: Boolean, qs: Boolean = false) {
         runOnUiThread {
             if (isFinishing || isDestroyed) return@runOnUiThread
             finishWhenHidden = false
             if (on) {
-                rgb = Prefs.rgb(this)
-                tintAlpha = 255 * Prefs.tint(this) / 100
-                dimAlpha = 255 * Prefs.dim(this) / 100
-                blurPx = (Prefs.blur(this) * resources.displayMetrics.density).toInt()
+                val night = nightProfile()
+                val newRgb = Prefs.rgb(this, night)
+                val newTint = 255 * Prefs.tint(this, night) / 100
+                val extra = if (qs) Prefs.dimQs(this) else 0
+                val newDim = (255 * (Prefs.dim(this, night) + extra) / 100).coerceAtMost(255 * 90 / 100)
+                val newBlur = (Prefs.blur(this) * resources.displayMetrics.density).toInt()
+                val key = listOf(newRgb, newTint, newDim, newBlur).hashCode()
+                if (key == paramsKey && !running && progress == 1f) return@runOnUiThread  // nothing changed
+                paramsKey = key
+                rgb = newRgb
+                tintAlpha = newTint
+                dimAlpha = newDim
+                blurPx = newBlur
             }
             animateTo(if (on) 1f else 0f)
         }
@@ -155,6 +174,9 @@ class BackdropActivity : Activity() {
 
     override fun finish() {
         stopAnim()
+        // Let the service see "no backdrop" at once, so a quick re-open gets a fresh window
+        // instead of finding this half-finished one.
+        if (instance === this) instance = null
         super.finish()
         overridePendingTransition(0, 0)
     }

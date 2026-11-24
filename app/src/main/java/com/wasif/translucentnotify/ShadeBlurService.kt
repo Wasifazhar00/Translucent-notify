@@ -19,15 +19,13 @@ import android.view.accessibility.AccessibilityWindowInfo
 
 /**
  * On-demand blur behind the notification shade. Idle = nothing: no window, no overlay, no receivers,
- * and the service only gets events from System UI (never from other apps).
+ * and the service only gets events from System UI (plus the few apps the owner marked as protected).
  *
  * Shade opens  -> start BackdropActivity (a normal app window, always below the shade). Starting an
  *                 activity may collapse the shade; if it does, it is re-opened right away. If the shade
- *                 is still open shortly after the backdrop is ready, it survived: no re-open is armed,
- *                 so a user closing it afterwards is never undone.
+ *                 is still open shortly after the backdrop is ready, it survived: no re-open is armed.
  * Shade closes -> BackdropActivity fades out and finishes; nothing is left behind.
- * While the backdrop exists the state is re-checked every POLL_MS (events alone can arrive late or not
- * at all after the shade collapses). With no backdrop there is no polling.
+ * While the backdrop exists the state is re-checked every POLL_MS. With no backdrop there is no polling.
  * Lock screen, the moments after unlock, screen off, fingerprint popups: ignored.
  */
 class ShadeBlurService : AccessibilityService() {
@@ -42,9 +40,11 @@ class ShadeBlurService : AccessibilityService() {
     private var lastLaunch = 0L
     private var resumedAt = 0L
     private var unlockedAt = 0L
+    private var lastEventAt = 0L
     private var awaitingReopenUntil = 0L
     private var wasLocked = false
     private var reopenPending = false
+    private var qsOpen = false
     private var lastSysUiClass: String? = null
     private val check = Runnable { evaluate() }
     private val clearPending = Runnable { reopenPending = false }
@@ -60,10 +60,30 @@ class ShadeBlurService : AccessibilityService() {
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         power = getSystemService(Context.POWER_SERVICE) as PowerManager
         keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        refreshWatched()
+    }
+
+    /** Listen to System UI plus the protected apps (so they can trigger an automatic pause). */
+    fun refreshWatched() {
+        val info = serviceInfo ?: return
+        info.packageNames = (listOf(SYSTEMUI) + Prefs.protectedApps(this)).toTypedArray()
+        serviceInfo = info
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+        if (event == null) return
+        lastEventAt = SystemClock.uptimeMillis()
+        val pkg = event.packageName?.toString()
+        if (pkg != null && pkg != SYSTEMUI) {
+            // Only protected apps reach this point. Opening one pauses the detector (owner mode).
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                Prefs.autoPause(this) && pkg in Prefs.protectedApps(this)
+            ) {
+                OwnerMode.pause(this, "Paused for a protected app", Prefs.pauseMin(this))
+            }
+            return
+        }
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             lastSysUiClass = event.className?.toString()
         }
         main.removeCallbacks(check)   // coalesce bursts of events into one evaluation
@@ -103,7 +123,7 @@ class ShadeBlurService : AccessibilityService() {
                 active = true
                 val backdrop = BackdropActivity.instance
                 if (backdrop != null) {
-                    backdrop.setActive(true)
+                    backdrop.setActive(true, qsOpen)
                     // Shade still open well after the backdrop came up: it was NOT collapsed by the
                     // launch (e.g. empty notification list), so never re-open it later.
                     if (reopenPending && resumedAt > lastLaunch && now - resumedAt > SURVIVE_MS) {
@@ -173,6 +193,7 @@ class ShadeBlurService : AccessibilityService() {
     }
 
     private fun classify(): Sys {
+        qsOpen = false
         val c = sysUiBigWindows()
         if (c.isEmpty()) {
             lastSysUiClass = null
@@ -181,10 +202,12 @@ class ShadeBlurService : AccessibilityService() {
         val cls = lastSysUiClass?.lowercase().orEmpty()
         if (NOT_SHADE_HINTS.any { cls.contains(it) }) return Sys.OTHER
         val titles = c.mapNotNull { it.title?.toString()?.lowercase() }.filter { it.isNotBlank() }
-        if (titles.any { t -> SHADE_HINTS.any { t.contains(it) } }) return Sys.SHADE
-        if (SHADE_HINTS.any { cls.contains(it) }) return Sys.SHADE
-        if (titles.isNotEmpty()) return Sys.OTHER
-        return if (c.any { it.isActive || it.isFocused }) Sys.SHADE else Sys.OTHER
+        val shade = titles.any { t -> SHADE_HINTS.any { t.contains(it) } } ||
+            SHADE_HINTS.any { cls.contains(it) } ||
+            (titles.isEmpty() && c.any { it.isActive || it.isFocused })
+        if (!shade) return Sys.OTHER
+        qsOpen = titles.any { t -> QS_HINTS.any { t.contains(it) } } || QS_HINTS.any { cls.contains(it) }
+        return Sys.SHADE
     }
 
     // ---------- launching ----------
@@ -243,9 +266,11 @@ class ShadeBlurService : AccessibilityService() {
     /** Text dump of all windows, used to calibrate shade detection on the real phone. */
     fun dumpWindows(): String {
         val r = Rect()
+        val now = SystemClock.uptimeMillis()
         val sb = StringBuilder(
-            "class=${classify()} sysUiClass=$lastSysUiClass backdrop=${BackdropActivity.instance != null} " +
-                "locked=${keyguard.isKeyguardLocked} reopenPending=$reopenPending animMs=${Prefs.animMs(this)}\n"
+            "class=${classify()} qs=$qsOpen sysUiClass=$lastSysUiClass backdrop=${BackdropActivity.instance != null} " +
+                "locked=${keyguard.isKeyguardLocked} reopenPending=$reopenPending animMs=${Prefs.animMs(this)} " +
+                "lastEventAgoMs=${now - lastEventAt}\n"
         )
         windows.sortedByDescending { it.layer }.forEach { w ->
             w.getBoundsInScreen(r)
@@ -261,12 +286,13 @@ class ShadeBlurService : AccessibilityService() {
         private const val SYSTEMUI = "com.android.systemui"
         private const val POLL_MS = 80L
         private const val SURVIVE_MS = 300L          // shade still open this long after backdrop is up = it survived
-        private const val LAUNCH_GAP_MS = 800L
+        private const val LAUNCH_GAP_MS = 350L
         private const val PENDING_TIMEOUT_MS = 800L
         private const val REOPEN_WAIT_MS = 700L
         private const val ANCHOR_TIMEOUT_MS = 1500L
         private const val UNLOCK_GUARD_MS = 1200L
         private val SHADE_HINTS = listOf("shade", "quick settings", "quicksettings", "notification panel", "notificationpanel")
+        private val QS_HINTS = listOf("quick settings", "quicksettings", "qspanel", "qs_panel")
         private val NOT_SHADE_HINTS = listOf("biometric", "authcontainer", "fingerprint", "faceunlock", "udfps", "keyguard", "lockscreen", "bouncer")
     }
 }

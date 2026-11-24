@@ -1,6 +1,8 @@
 package com.wasif.translucentnotify
 
+import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -12,6 +14,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -21,6 +24,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
@@ -31,12 +35,18 @@ class MainActivity : Activity() {
     private lateinit var overlayStatus: TextView
     private lateinit var a11yStatus: TextView
     private lateinit var blurStatus: TextView
+    private lateinit var ownerStatus: TextView
+    private lateinit var appsLabel: TextView
     private lateinit var dumpView: TextView
+    private lateinit var profileButton: Button
     private lateinit var previewTint: View
     private lateinit var hue: Slider
     private lateinit var sat: Slider
     private lateinit var bright: Slider
+    private lateinit var tint: Slider
+    private lateinit var dim: Slider
     private val main = Handler(Looper.getMainLooper())
+    private var night = false          // which glass profile the sliders are editing
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,6 +102,18 @@ class MainActivity : Activity() {
         page.addView(previewBox, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(90)).apply { topMargin = dp(6); bottomMargin = dp(10) })
 
+        page.addView(Switch(this).apply {
+            text = "Auto day / night glass (follow the phone's dark mode)"
+            setTextColor(Color.WHITE)
+            isChecked = Prefs.autoTheme(this@MainActivity)
+            setOnCheckedChangeListener { _, on -> Prefs.setAutoTheme(this@MainActivity, on) }
+        })
+        profileButton = button("") {
+            night = !night
+            loadProfile()
+        }
+        page.addView(profileButton)
+
         page.addView(label("Colour presets", 14, Color.WHITE, true))
         page.addView(HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -102,24 +124,33 @@ class MainActivity : Activity() {
         })
 
         page.addView(label("Hue", 14, Color.WHITE, true).apply { setPadding(0, dp(10), 0, 0) })
-        hue = slider(360, Prefs.hue(this), "\u00B0") { Prefs.setHue(this, it); refreshPreview() }
+        hue = slider(360, Prefs.hue(this, night), "\u00B0") { Prefs.setHue(this, it, night); refreshPreview() }
         page.addView(hue.row)
         page.addView(label("Colour strength (saturation)", 14, Color.WHITE, true))
-        sat = slider(100, Prefs.sat(this), "%") { Prefs.setSat(this, it); refreshPreview() }
+        sat = slider(100, Prefs.sat(this, night), "%") { Prefs.setSat(this, it, night); refreshPreview() }
         page.addView(sat.row)
         page.addView(label("Colour lightness", 14, Color.WHITE, true))
-        bright = slider(100, Prefs.bright(this), "%") { Prefs.setBright(this, it); refreshPreview() }
+        bright = slider(100, Prefs.bright(this, night), "%") { Prefs.setBright(this, it, night); refreshPreview() }
         page.addView(bright.row)
 
         page.addView(label("Tint amount", 14, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
-        page.addView(slider(80, Prefs.tint(this), "%") { Prefs.setTint(this, it); refreshPreview() }.row)
+        tint = slider(80, Prefs.tint(this, night), "%") { Prefs.setTint(this, it, night); refreshPreview() }
+        page.addView(tint.row)
         page.addView(label("Darkness (black layer)", 14, Color.WHITE, true))
-        page.addView(slider(70, Prefs.dim(this), "%") { Prefs.setDim(this, it); refreshPreview() }.row)
+        dim = slider(70, Prefs.dim(this, night), "%") { Prefs.setDim(this, it, night); refreshPreview() }
+        page.addView(dim.row)
 
         page.addView(label("Blur", 14, Color.WHITE, true))
         page.addView(slider(100, Prefs.blur(this), "") { Prefs.setBlur(this, it) }.row)
         blurStatus = label("", 12, HINT, false)
         page.addView(blurStatus)
+
+        page.addView(label("Extra darkness on Quick Settings", 14, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
+        page.addView(label(
+            "Added on top while the Quick Settings tiles are showing. Experimental: it works only if the phone reports the Quick Settings page (see Calibration).",
+            12, HINT, false
+        ))
+        page.addView(slider(50, Prefs.dimQs(this), "%") { Prefs.setDimQs(this, it) }.row)
 
         page.addView(label("Animation duration", 14, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
         page.addView(label("Lower = faster. 0 = instant. Applies to fade in and fade out.", 12, HINT, false))
@@ -132,31 +163,92 @@ class MainActivity : Activity() {
             else s.preview()
         })
 
-        // ---- banking / protected apps ----
-        page.addView(label("Banking and protected apps", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(6)) })
+        // ---- owner mode ----
+        page.addView(label("Owner mode", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(6)) })
         page.addView(label(
-            "Some banking and wallet apps refuse to run while ANY accessibility service is switched on, and show a screen-recording or suspicious-service warning. Android lets every app see which services are on, and these checks are there to stop fraud, so this app does not try to hide from them.\n\n" +
-                "What works: switch the detector off before opening such an app, and on again afterwards.",
+            "For your own phone. One-time setup lets this app switch its own detector on and off. Then it can: turn the detector back on by itself (boot, update, app open), revive it if the system stopped it, and pause it while a banking app is open.\n\n" +
+                "Run this once from a computer (or a wireless-debugging app on the phone):",
             12, MUTED, false
         ))
+        page.addView(label(
+            "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS",
+            12, ACCENT, false
+        ).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true); setPadding(0, dp(8), 0, dp(4)) })
+        ownerStatus = label("", 13, MUTED, false)
+        page.addView(ownerStatus)
+
+        page.addView(Switch(this).apply {
+            text = "Keep the detector switched on by itself"
+            setTextColor(Color.WHITE)
+            isChecked = Prefs.ownerAuto(this@MainActivity)
+            setOnCheckedChangeListener { _, on -> Prefs.setOwnerAuto(this@MainActivity, on) }
+        })
+        page.addView(button("Revive detector now") {
+            if (OwnerMode.granted(this)) {
+                OwnerMode.revive(this)
+                toast("Detector restarted.")
+                main.postDelayed({ refreshStatus() }, 900)
+            } else toast("Owner mode is not set up yet.")
+        })
+
+        page.addView(label("Banking and protected apps", 16, Color.WHITE, true).apply { setPadding(0, dp(18), 0, 0) })
+        page.addView(label(
+            "Banking and wallet apps may refuse to run while ANY accessibility service is on. This app does not hide from those checks. Instead it really switches the detector off for them.\n\n" +
+                "The automatic pause starts when a protected app opens. An app that checks only in its first split second can still complain: then use the Quick Settings tile or the shortcut to switch the detector off BEFORE opening it.",
+            12, MUTED, false
+        ))
+        appsLabel = label("", 13, ACCENT, true)
+        page.addView(appsLabel)
+        page.addView(button("Choose protected apps") { pickApps() })
+        page.addView(Switch(this).apply {
+            text = "Pause automatically when a protected app opens"
+            setTextColor(Color.WHITE)
+            isChecked = Prefs.autoPause(this@MainActivity)
+            setOnCheckedChangeListener { _, on -> Prefs.setAutoPause(this@MainActivity, on) }
+        })
+        page.addView(label("Resume by itself after", 14, Color.WHITE, true).apply { setPadding(0, dp(8), 0, 0) })
+        page.addView(slider(60, Prefs.pauseMin(this), " min") { Prefs.setPauseMin(this, it.coerceAtLeast(1)) }.row)
+        page.addView(label("You can also resume by tapping the \"Glass detector paused\" notification.", 12, HINT, false))
         page.addView(button("Pause detector now") {
-            val s = ShadeBlurService.instance
-            if (s == null) toast("The detector is already off.")
-            else {
-                s.disableSelf()
+            if (OwnerMode.granted(this)) {
+                OwnerMode.pause(this, "Paused from the app", null)
                 toast("Detector paused. Your banking app can be opened now.")
-                main.postDelayed({ onResume() }, 400)
+            } else {
+                val s = ShadeBlurService.instance
+                if (s == null) toast("The detector is already off.")
+                else {
+                    s.disableSelf()
+                    toast("Detector paused. Switch it on again in Accessibility settings.")
+                }
             }
+            main.postDelayed({ refreshStatus() }, 600)
         })
         page.addView(label(
-            "To switch it back on with ONE tap, make it a shortcut: Settings > Accessibility (may be under Additional settings) > Shortcut / Accessibility button or Volume keys shortcut > choose \"Translucent Notify shade detector\". Menu names differ a little on OxygenOS.",
+            "Quick Settings tile: pull the shade, tap the pencil/edit icon, and drag \"Glass blur\" into your tiles. One tap = detector off, another tap = on (needs owner mode).",
             12, HINT, false
         ).apply { setPadding(0, dp(8), 0, 0) })
+
+        page.addView(label("Keep it alive", 16, Color.WHITE, true).apply { setPadding(0, dp(18), 0, 0) })
+        page.addView(label(
+            "If the glass sometimes does not appear, OxygenOS may have stopped the detector to save battery. Allow background use, and allow notifications for the pause notice.",
+            12, MUTED, false
+        ))
+        page.addView(button("Allow background use (battery)") {
+            runCatching {
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+            }.onFailure {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        })
+        page.addView(button("Allow notifications") {
+            if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+            else toast("Notifications are already allowed.")
+        })
 
         // ---- calibration ----
         page.addView(label("Calibration", 16, Color.WHITE, true).apply { setPadding(0, dp(22), 0, 0) })
         page.addView(label(
-            "If the glass does not appear (or stays on) with the real shade, tap this, then pull the shade down within 4 seconds and keep it open. Come back here and send me the text.",
+            "If the glass does not appear (or stays on) with the real shade, tap this, then pull the shade down within 4 seconds and keep it open. Come back here and send me the text. For Quick Settings, do it with the tiles open.",
             12, HINT, false
         ))
         page.addView(button("Capture windows in 4 s") {
@@ -170,21 +262,22 @@ class MainActivity : Activity() {
         }
         page.addView(dumpView)
 
-        refreshPreview()
+        loadProfile()
     }
 
     override fun onResume() {
         super.onResume()
-        val a11y = Settings.Secure.getString(
-            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ).orEmpty().contains("$packageName/")
-        status(overlayStatus, Settings.canDrawOverlays(this), "ON", "OFF - allow it")
-        status(a11yStatus, a11y, "ON", "OFF - turn on \"Translucent Notify shade detector\"")
-        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        blurStatus.text = when {
-            Build.VERSION.SDK_INT < 31 -> "Blur: not supported (Android 12+ needed). Tint only."
-            wm.isCrossWindowBlurEnabled -> "Blur: supported on this device."
-            else -> "Blur: switched off by the system right now (battery saver, developer option or OEM setting). Tint only."
+        refreshStatus()
+        // Owner mode: switch the detector on if it is off, or restart it if it is on but not running.
+        if (Prefs.ownerAuto(this) && OwnerMode.granted(this)) {
+            if (!OwnerMode.isEnabled(this)) {
+                OwnerMode.setEnabled(this, true)
+            } else {
+                main.postDelayed({
+                    if (OwnerMode.isEnabled(this) && ShadeBlurService.instance == null) OwnerMode.revive(this)
+                }, 1800)
+            }
+            main.postDelayed({ refreshStatus() }, 2500)
         }
     }
 
@@ -193,14 +286,74 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    // ---------- status ----------
+
+    private fun refreshStatus() {
+        val a11y = OwnerMode.isEnabled(this)
+        status(overlayStatus, Settings.canDrawOverlays(this), "ON", "OFF - allow it")
+        status(a11yStatus, a11y, "ON", "OFF - turn on \"Translucent Notify shade detector\"")
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        blurStatus.text = when {
+            Build.VERSION.SDK_INT < 31 -> "Blur: not supported (Android 12+ needed). Tint only."
+            wm.isCrossWindowBlurEnabled -> "Blur: supported on this device."
+            else -> "Blur: switched off by the system right now (battery saver, developer option or OEM setting). Tint only."
+        }
+        val owner = OwnerMode.granted(this)
+        status(ownerStatus, owner, "Owner mode: READY", "Owner mode: not set up (needs the one-time command above)")
+        val n = Prefs.protectedApps(this).size
+        appsLabel.text = if (n == 0) "No protected apps chosen" else "$n protected app(s) chosen"
+    }
+
+    private fun status(v: TextView, ok: Boolean, on: String, off: String) {
+        v.text = if (ok) on else off
+        v.setTextColor(if (ok) GOOD else BAD)
+    }
+
+    // ---------- protected apps ----------
+
+    private fun pickApps() {
+        val pm = packageManager
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = pm.queryIntentActivities(launcher, 0)
+            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+            .filter { it.first != packageName }
+            .distinctBy { it.first }
+            .sortedBy { it.second.lowercase() }
+        val chosen = Prefs.protectedApps(this).toMutableSet()
+        val checked = BooleanArray(apps.size) { apps[it].first in chosen }
+        AlertDialog.Builder(this)
+            .setTitle("Protected apps")
+            .setMultiChoiceItems(apps.map { it.second }.toTypedArray(), checked) { _, i, on ->
+                if (on) chosen.add(apps[i].first) else chosen.remove(apps[i].first)
+            }
+            .setPositiveButton("Save") { _, _ ->
+                Prefs.setProtectedApps(this, chosen)
+                ShadeBlurService.instance?.refreshWatched()
+                refreshStatus()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     // ---------- look helpers ----------
+
+    /** Show the day or night profile in the sliders. */
+    private fun loadProfile() {
+        profileButton.text = if (night) "Editing: NIGHT glass (tap for day)" else "Editing: DAY glass (tap for night)"
+        hue.bar.progress = Prefs.hue(this, night)
+        sat.bar.progress = Prefs.sat(this, night)
+        bright.bar.progress = Prefs.bright(this, night)
+        tint.bar.progress = Prefs.tint(this, night)
+        dim.bar.progress = Prefs.dim(this, night)
+        refreshPreview()
+    }
 
     private fun refreshPreview() {
         previewTint.setBackgroundColor(
             Frost.color(
-                Prefs.rgb(this),
-                255 * Prefs.tint(this) / 100,
-                255 * Prefs.dim(this) / 100,
+                Prefs.rgb(this, night),
+                255 * Prefs.tint(this, night) / 100,
+                255 * Prefs.dim(this, night) / 100,
                 1f
             )
         )
@@ -211,7 +364,7 @@ class MainActivity : Activity() {
         return TextView(this).apply {
             text = p.name
             textSize = 11f
-            gravity = android.view.Gravity.CENTER
+            gravity = Gravity.CENTER
             setTextColor(if (p.bright > 60) Color.BLACK else Color.WHITE)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
@@ -229,11 +382,6 @@ class MainActivity : Activity() {
                 bright.bar.progress = p.bright
             }
         }
-    }
-
-    private fun status(v: TextView, ok: Boolean, on: String, off: String) {
-        v.text = if (ok) on else off
-        v.setTextColor(if (ok) GOOD else BAD)
     }
 
     private fun slider(max: Int, start: Int, unit: String, onChange: (Int) -> Unit): Slider {
