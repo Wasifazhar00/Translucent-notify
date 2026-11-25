@@ -27,7 +27,12 @@ import android.view.accessibility.AccessibilityWindowInfo
  *                 activity may collapse the shade; if it does, it is re-opened right away. If the shade
  *                 is still open shortly after the backdrop is ready, it survived: no re-open is armed.
  * Shade closes -> BackdropActivity fades out and finishes; nothing is left behind.
- * While the backdrop exists the state is re-checked every POLL_MS. With no backdrop there is no polling.
+ *
+ * Never wait for an event that may not come: while the shade is open (or looks like it is about to be),
+ * the state is re-checked every POLL_MS, and every event is followed by one more check. That is what
+ * makes the glass appear even when the first launch is slow, fails once, or the shade was pulled during
+ * the unlock grace period. With the shade closed and no glass on screen there is no polling at all.
+ *
  * Lock screen, the moments after unlock, screen off, fingerprint popups: ignored.
  * A protected app opening switches this service off by itself (disableSelf).
  */
@@ -43,10 +48,12 @@ class ShadeBlurService : AccessibilityService() {
     private var lastLaunch = 0L
     private var resumedAt = 0L
     private var unlockedAt = 0L
+    private var otherSince = 0L
     private var lastEventAt = 0L
     private var awaitingReopenUntil = 0L
     private var wasLocked = false
     private var reopenPending = false
+    private var sysUiPresent = false
     private var qsOpen = false
     private var lastSysUiClass: String? = null
     private val check = Runnable { evaluate() }
@@ -91,8 +98,10 @@ class ShadeBlurService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             lastSysUiClass = event.className?.toString()
         }
-        main.removeCallbacks(check)   // coalesce bursts of events into one evaluation
+        // Check now, and once more shortly after: the window list can lag behind the event.
+        main.removeCallbacks(check)
         main.post(check)
+        main.postDelayed(check, FOLLOW_UP_MS)
     }
 
     override fun onInterrupt() = Unit
@@ -132,7 +141,8 @@ class ShadeBlurService : AccessibilityService() {
     private fun evaluate() {
         val now = SystemClock.uptimeMillis()
         if (now < previewUntil) return
-        val state = if (suppressed(now)) Sys.OTHER else classify()
+        val ignored = suppressed(now)
+        val state = if (ignored) Sys.OTHER else classify()
         when {
             state == Sys.SHADE -> {
                 awaitingReopenUntil = 0L
@@ -146,6 +156,7 @@ class ShadeBlurService : AccessibilityService() {
                         reopenPending = false
                     }
                 } else if (now - lastLaunch > LAUNCH_GAP_MS) {
+                    // First try, or the last try did not produce a window: (re)start it.
                     reopenPending = true                    // the launch may collapse the shade: re-open it
                     main.removeCallbacks(clearPending)
                     main.postDelayed(clearPending, PENDING_TIMEOUT_MS)
@@ -164,8 +175,24 @@ class ShadeBlurService : AccessibilityService() {
                 release()
             }
         }
-        // Poll only while there is something on screen to take down.
-        if (BackdropActivity.instance != null || reopenPending || now < awaitingReopenUntil) {
+
+        // A big System UI window that is not (yet) recognised as the shade: keep looking for a moment,
+        // its title / focus can arrive a little after the window itself.
+        if (state == Sys.OTHER && !ignored && sysUiPresent) {
+            if (otherSince == 0L) otherSince = now
+        } else {
+            otherSince = 0L
+        }
+
+        // Keep checking only while it matters. Never rely on the next event alone.
+        val unlockGrace = ignored && power.isInteractive && !keyguard.isKeyguardLocked
+        val keepChecking = BackdropActivity.instance != null ||
+            reopenPending ||
+            now < awaitingReopenUntil ||
+            state == Sys.SHADE ||
+            unlockGrace ||
+            (otherSince != 0L && now - otherSince < OTHER_RECHECK_MS)
+        if (keepChecking) {
             main.removeCallbacks(check)
             main.postDelayed(check, POLL_MS)
         }
@@ -211,16 +238,23 @@ class ShadeBlurService : AccessibilityService() {
     private fun classify(): Sys {
         qsOpen = false
         val c = sysUiBigWindows()
+        sysUiPresent = c.isNotEmpty()
         if (c.isEmpty()) {
             lastSysUiClass = null
             return Sys.NONE
         }
         val cls = lastSysUiClass?.lowercase().orEmpty()
-        if (NOT_SHADE_HINTS.any { cls.contains(it) }) return Sys.OTHER
         val titles = c.mapNotNull { it.title?.toString()?.lowercase() }.filter { it.isNotBlank() }
-        val shade = titles.any { t -> SHADE_HINTS.any { t.contains(it) } } ||
-            SHADE_HINTS.any { cls.contains(it) } ||
-            (titles.isEmpty() && c.any { it.isActive || it.isFocused })
+
+        // The windows' CURRENT titles are the most reliable; the last event's class can be stale.
+        if (titles.any { t -> NOT_SHADE_HINTS.any { t.contains(it) } }) return Sys.OTHER
+        val shade = when {
+            titles.any { t -> SHADE_HINTS.any { t.contains(it) } } -> true
+            titles.isNotEmpty() -> false
+            NOT_SHADE_HINTS.any { cls.contains(it) } -> false
+            SHADE_HINTS.any { cls.contains(it) } -> true
+            else -> c.any { it.isActive || it.isFocused }
+        }
         if (!shade) return Sys.OTHER
         qsOpen = titles.any { t -> QS_HINTS.any { t.contains(it) } } || QS_HINTS.any { cls.contains(it) }
         return Sys.SHADE
@@ -286,7 +320,7 @@ class ShadeBlurService : AccessibilityService() {
         val sb = StringBuilder(
             "class=${classify()} qs=$qsOpen sysUiClass=$lastSysUiClass backdrop=${BackdropActivity.instance != null} " +
                 "locked=${keyguard.isKeyguardLocked} reopenPending=$reopenPending animMs=${Prefs.animMs(this)} " +
-                "lastEventAgoMs=${now - lastEventAt}\n"
+                "lastEventAgoMs=${now - lastEventAt} sinceLaunchMs=${now - lastLaunch}\n"
         )
         windows.sortedByDescending { it.layer }.forEach { w ->
             w.getBoundsInScreen(r)
@@ -301,9 +335,11 @@ class ShadeBlurService : AccessibilityService() {
         @Volatile var instance: ShadeBlurService? = null
         private const val SYSTEMUI = "com.android.systemui"
         private const val POLL_MS = 80L
-        private const val SURVIVE_MS = 300L          // shade still open this long after backdrop is up = it survived
-        private const val LAUNCH_GAP_MS = 350L
-        private const val PENDING_TIMEOUT_MS = 800L
+        private const val FOLLOW_UP_MS = 150L         // one more look after every event
+        private const val OTHER_RECHECK_MS = 1500L    // keep looking at an unrecognised big System UI window
+        private const val SURVIVE_MS = 300L           // shade still open this long after backdrop is up = it survived
+        private const val LAUNCH_GAP_MS = 600L        // before the launch is tried again
+        private const val PENDING_TIMEOUT_MS = 1500L  // slow launches: the collapse can come late
         private const val REOPEN_WAIT_MS = 700L
         private const val ANCHOR_TIMEOUT_MS = 1500L
         private const val UNLOCK_GUARD_MS = 1200L
