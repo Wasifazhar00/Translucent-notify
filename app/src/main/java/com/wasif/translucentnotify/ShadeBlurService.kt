@@ -5,6 +5,7 @@ import android.app.KeyguardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Handler
@@ -28,10 +29,12 @@ import android.view.accessibility.AccessibilityWindowInfo
  *                 is still open shortly after the backdrop is ready, it survived: no re-open is armed.
  * Shade closes -> BackdropActivity fades out and finishes; nothing is left behind.
  *
- * Never wait for an event that may not come: while the shade is open (or looks like it is about to be),
- * the state is re-checked every POLL_MS, and every event is followed by one more check. That is what
- * makes the glass appear even when the first launch is slow, fails once, or the shade was pulled during
- * the unlock grace period. With the shade closed and no glass on screen there is no polling at all.
+ * Never wait for an event that may not come: while the shade is open the state is re-checked every
+ * few ms, and every event is followed by one more check. With the shade closed and no glass on screen
+ * there is no polling at all.
+ *
+ * The glass is an app window, so the app under it is paused for a moment. Apps that dislike that
+ * (app lock, video, camera) can be put on a skip list: over them nothing is started at all.
  *
  * Lock screen, the moments after unlock, screen off, fingerprint popups: ignored.
  * A protected app opening switches this service off by itself (disableSelf).
@@ -44,6 +47,7 @@ class ShadeBlurService : AccessibilityService() {
     private lateinit var keyguard: KeyguardManager
     private val main = Handler(Looper.getMainLooper())
     private var anchor: View? = null
+    private var homePkg: String? = null
     private var previewUntil = 0L
     private var lastLaunch = 0L
     private var resumedAt = 0L
@@ -51,14 +55,18 @@ class ShadeBlurService : AccessibilityService() {
     private var otherSince = 0L
     private var lastEventAt = 0L
     private var awaitingReopenUntil = 0L
+    private var launches = 0
+    private var launchFails = 0
     private var wasLocked = false
     private var reopenPending = false
+    private var skipThisShade = false
     private var sysUiPresent = false
     private var qsOpen = false
     private var lastSysUiClass: String? = null
     private val check = Runnable { evaluate() }
     private val clearPending = Runnable { reopenPending = false }
     private val dropAnchor = Runnable { removeAnchor() }
+    private val startBackdrop = Runnable { startBackdropNow() }
 
     /** True while the frosted look should be on. */
     @Volatile var active = false
@@ -70,6 +78,12 @@ class ShadeBlurService : AccessibilityService() {
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         power = getSystemService(Context.POWER_SERVICE) as PowerManager
         keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        homePkg = runCatching {
+            packageManager.resolveActivity(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                PackageManager.MATCH_DEFAULT_ONLY
+            )?.activityInfo?.packageName
+        }.getOrNull()
         refreshWatched()
         Detector.clearNotice(this)
         announceState()
@@ -143,24 +157,36 @@ class ShadeBlurService : AccessibilityService() {
         if (now < previewUntil) return
         val ignored = suppressed(now)
         val state = if (ignored) Sys.OTHER else classify()
+        if (state != Sys.SHADE) skipThisShade = false
+
         when {
             state == Sys.SHADE -> {
                 awaitingReopenUntil = 0L
-                active = true
                 val backdrop = BackdropActivity.instance
-                if (backdrop != null) {
-                    backdrop.setActive(true, qsOpen)
-                    // Shade still open well after the backdrop came up: it was NOT collapsed by the
-                    // launch (e.g. empty notification list), so never re-open it later.
-                    if (reopenPending && resumedAt > lastLaunch && now - resumedAt > SURVIVE_MS) {
-                        reopenPending = false
+                when {
+                    skipThisShade -> active = false          // no glass over this app: do nothing at all
+                    backdrop != null -> {
+                        active = true
+                        backdrop.setActive(true, qsOpen)
+                        // Shade still open well after the backdrop came up: it was NOT collapsed by the
+                        // launch (e.g. empty notification list), so never re-open it later.
+                        if (reopenPending && resumedAt > lastLaunch && now - resumedAt > SURVIVE_MS) {
+                            reopenPending = false
+                        }
                     }
-                } else if (now - lastLaunch > LAUNCH_GAP_MS) {
-                    // First try, or the last try did not produce a window: (re)start it.
-                    reopenPending = true                    // the launch may collapse the shade: re-open it
-                    main.removeCallbacks(clearPending)
-                    main.postDelayed(clearPending, PENDING_TIMEOUT_MS)
-                    launchBackdrop()
+                    now - lastLaunch > LAUNCH_GAP_MS -> {
+                        if (skipHere()) {
+                            skipThisShade = true
+                            active = false
+                        } else {
+                            // First try, or the last try did not produce a window: (re)start it.
+                            active = true
+                            reopenPending = true            // the launch may collapse the shade: re-open it
+                            main.removeCallbacks(clearPending)
+                            main.postDelayed(clearPending, PENDING_TIMEOUT_MS)
+                            launchBackdrop()
+                        }
+                    }
                 }
             }
             state == Sys.NONE && reopenPending -> {
@@ -189,12 +215,14 @@ class ShadeBlurService : AccessibilityService() {
         val keepChecking = BackdropActivity.instance != null ||
             reopenPending ||
             now < awaitingReopenUntil ||
-            state == Sys.SHADE ||
+            (state == Sys.SHADE && !skipThisShade) ||
             unlockGrace ||
             (otherSince != 0L && now - otherSince < OTHER_RECHECK_MS)
         if (keepChecking) {
+            // Look often right after a launch (that is when speed matters), calmer afterwards.
+            val delay = if (now - lastLaunch < FAST_WINDOW_MS) FAST_POLL_MS else POLL_MS
             main.removeCallbacks(check)
-            main.postDelayed(check, POLL_MS)
+            main.postDelayed(check, delay)
         }
     }
 
@@ -221,6 +249,21 @@ class ShadeBlurService : AccessibilityService() {
             unlockedAt = now
         }
         return now - unlockedAt < UNLOCK_GUARD_MS
+    }
+
+    // ---------- which app is under the shade ----------
+
+    /** Package of the topmost normal app window, or null if unknown. */
+    private fun topAppPackage(): String? =
+        windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            .maxByOrNull { it.layer }
+            ?.root?.packageName?.toString()
+
+    /** True if no glass should be started over the app that is currently in front. */
+    private fun skipHere(): Boolean {
+        val top = topAppPackage() ?: return false
+        if (top in AppFilter.skipApps(this)) return true
+        return AppFilter.homeOnly(this) && top != homePkg
     }
 
     // ---------- System UI classification ----------
@@ -286,10 +329,23 @@ class ShadeBlurService : AccessibilityService() {
         anchor = null
     }
 
+    /**
+     * Add the helper window first and start the backdrop a moment later: if both happen in the same
+     * instant Android may not count the helper window as visible yet and blocks the start (that was the
+     * "sometimes late / sometimes never" glass).
+     */
     private fun launchBackdrop() {
         lastLaunch = SystemClock.uptimeMillis()
         addAnchor()
-        runCatching {
+        main.removeCallbacks(startBackdrop)
+        main.postDelayed(startBackdrop, ANCHOR_SETTLE_MS)
+        main.removeCallbacks(dropAnchor)
+        main.postDelayed(dropAnchor, ANCHOR_TIMEOUT_MS)   // safety: never leave the anchor behind
+    }
+
+    private fun startBackdropNow() {
+        launches++
+        val ok = runCatching {
             startActivity(
                 Intent(this, BackdropActivity::class.java).addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -297,8 +353,8 @@ class ShadeBlurService : AccessibilityService() {
                         Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
                 )
             )
-        }
-        main.postDelayed(dropAnchor, ANCHOR_TIMEOUT_MS)   // safety: never leave the anchor behind
+        }.isSuccess
+        if (!ok) launchFails++
     }
 
     /** Settings-screen test: frosted look for 5 s without needing shade detection. */
@@ -320,7 +376,8 @@ class ShadeBlurService : AccessibilityService() {
         val sb = StringBuilder(
             "class=${classify()} qs=$qsOpen sysUiClass=$lastSysUiClass backdrop=${BackdropActivity.instance != null} " +
                 "locked=${keyguard.isKeyguardLocked} reopenPending=$reopenPending animMs=${Prefs.animMs(this)} " +
-                "lastEventAgoMs=${now - lastEventAt} sinceLaunchMs=${now - lastLaunch}\n"
+                "lastEventAgoMs=${now - lastEventAt} sinceLaunchMs=${now - lastLaunch} " +
+                "launches=$launches launchFails=$launchFails skip=$skipThisShade top=${topAppPackage()} home=$homePkg\n"
         )
         windows.sortedByDescending { it.layer }.forEach { w ->
             w.getBoundsInScreen(r)
@@ -335,11 +392,14 @@ class ShadeBlurService : AccessibilityService() {
         @Volatile var instance: ShadeBlurService? = null
         private const val SYSTEMUI = "com.android.systemui"
         private const val POLL_MS = 80L
-        private const val FOLLOW_UP_MS = 150L         // one more look after every event
-        private const val OTHER_RECHECK_MS = 1500L    // keep looking at an unrecognised big System UI window
-        private const val SURVIVE_MS = 300L           // shade still open this long after backdrop is up = it survived
-        private const val LAUNCH_GAP_MS = 600L        // before the launch is tried again
-        private const val PENDING_TIMEOUT_MS = 1500L  // slow launches: the collapse can come late
+        private const val FAST_POLL_MS = 40L           // right after a launch
+        private const val FAST_WINDOW_MS = 1500L
+        private const val FOLLOW_UP_MS = 150L          // one more look after every event
+        private const val ANCHOR_SETTLE_MS = 40L       // let the helper window become visible first
+        private const val OTHER_RECHECK_MS = 1500L     // keep looking at an unrecognised big System UI window
+        private const val SURVIVE_MS = 300L            // shade still open this long after backdrop is up = it survived
+        private const val LAUNCH_GAP_MS = 400L         // before the launch is tried again
+        private const val PENDING_TIMEOUT_MS = 1500L   // slow launches: the collapse can come late
         private const val REOPEN_WAIT_MS = 700L
         private const val ANCHOR_TIMEOUT_MS = 1500L
         private const val UNLOCK_GUARD_MS = 1200L

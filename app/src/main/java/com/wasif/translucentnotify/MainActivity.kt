@@ -39,6 +39,7 @@ class MainActivity : Activity() {
     private lateinit var a11yStatus: TextView
     private lateinit var blurStatus: TextView
     private lateinit var appsLabel: TextView
+    private lateinit var skipLabel: TextView
     private lateinit var dumpView: TextView
     private lateinit var profileButton: Button
     private lateinit var previewTint: View
@@ -215,6 +216,24 @@ class MainActivity : Activity() {
             else s.preview()
         })
 
+        // ---- apps the glass leaves alone ----
+        page.addView(label("Apps the glass leaves alone", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(6)) })
+        page.addView(label(
+            "The glass is an app window, so the app under it is paused for a moment. Apps with an app lock, video or camera can lock, reload or close because of that. Add such apps here: over them the glass is never started and the shade works exactly as without this app.",
+            12, muted, false
+        ))
+        skipLabel = label("", 13, accent, true)
+        page.addView(skipLabel)
+        page.addView(button("Choose apps to skip") {
+            pickApps("Skip the glass over", AppFilter.skipApps(this)) { AppFilter.setSkipApps(this, it) }
+        })
+        val homeOnly = Switch(this)
+        homeOnly.text = "Glass only over the home screen (every app untouched)"
+        homeOnly.setTextColor(Color.WHITE)
+        homeOnly.isChecked = AppFilter.homeOnly(this)
+        homeOnly.setOnCheckedChangeListener { _, on -> AppFilter.setHomeOnly(this, on) }
+        page.addView(homeOnly)
+
         // ---- banking / protected apps ----
         page.addView(label("Banking and protected apps", 20, Color.WHITE, true).apply { setPadding(0, dp(26), 0, dp(6)) })
         page.addView(label(
@@ -224,7 +243,9 @@ class MainActivity : Activity() {
         ))
         appsLabel = label("", 13, accent, true)
         page.addView(appsLabel)
-        page.addView(button("Choose protected apps") { pickApps() })
+        page.addView(button("Choose protected apps") {
+            pickApps("Protected apps", Prefs.protectedApps(this)) { Prefs.setProtectedApps(this, it) }
+        })
         val autoOff = Switch(this)
         autoOff.text = "Switch the detector off when a protected app opens"
         autoOff.setTextColor(Color.WHITE)
@@ -303,6 +324,8 @@ class MainActivity : Activity() {
         }
         val n = Prefs.protectedApps(this).size
         appsLabel.text = if (n == 0) "No protected apps chosen" else "$n protected app(s) chosen"
+        val k = AppFilter.skipApps(this).size
+        skipLabel.text = if (k == 0) "No apps skipped" else "$k app(s) skipped"
     }
 
     private fun status(v: TextView, ok: Boolean, on: String, off: String) {
@@ -310,9 +333,9 @@ class MainActivity : Activity() {
         v.setTextColor(if (ok) good else bad)
     }
 
-    // ---------- protected apps ----------
+    // ---------- app picker ----------
 
-    private fun pickApps() {
+    private fun pickApps(title: String, current: Set<String>, save: (Set<String>) -> Unit) {
         val pm = packageManager
         val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val apps = pm.queryIntentActivities(launcher, 0)
@@ -320,16 +343,16 @@ class MainActivity : Activity() {
             .filter { it.first != packageName }
             .distinctBy { it.first }
             .sortedBy { it.second.lowercase() }
-        val chosen = Prefs.protectedApps(this).toMutableSet()
+        val chosen = current.toMutableSet()
         val checked = BooleanArray(apps.size) { apps[it].first in chosen }
         val names = Array(apps.size) { apps[it].second }
         val builder = AlertDialog.Builder(this)
-        builder.setTitle("Protected apps")
+        builder.setTitle(title)
         builder.setMultiChoiceItems(names, checked) { _, i, on ->
             if (on) chosen.add(apps[i].first) else chosen.remove(apps[i].first)
         }
         builder.setPositiveButton("Save") { _, _ ->
-            Prefs.setProtectedApps(this, chosen)
+            save(chosen)
             ShadeBlurService.instance?.refreshWatched()
             refreshStatus()
         }
