@@ -6,6 +6,9 @@
         <item name="android:windowAnimationStyle">@null</item>
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:windowNoTitle">true</item>
+        <!-- No system "starting window" for this activity: it is an extra focusable window that can steal
+             focus from the shade (and costs time) before our own non-focusable window appears. -->
+        <item name="android:windowDisablePreview">true</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>

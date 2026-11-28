@@ -11,8 +11,8 @@ android {
         applicationId = "com.wasif.translucentnotify"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "7.1.2"
+        versionCode = 20
+        versionName = "7.1.3"
     }
 
     signingConfigs {
