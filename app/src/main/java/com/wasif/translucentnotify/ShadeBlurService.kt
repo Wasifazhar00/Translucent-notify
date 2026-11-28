@@ -35,6 +35,7 @@ import android.view.accessibility.AccessibilityWindowInfo
  *
  * Lock screen, the moments after unlock, screen off, fingerprint popups: ignored.
  * A protected app opening switches this service off by itself (disableSelf).
+ * Everything notable is written to EventLog so a miss can be read afterwards.
  */
 class ShadeBlurService : AccessibilityService() {
     private enum class Sys { NONE, SHADE, OTHER }
@@ -55,6 +56,9 @@ class ShadeBlurService : AccessibilityService() {
     private var reopenPending = false
     private var sysUiPresent = false
     private var qsOpen = false
+    private var whyIgnored = ""
+    private var lastState: Sys? = null
+    private var lastIgnored = false
     private var lastSysUiClass: String? = null
     private val check = Runnable { evaluate() }
     private val clearPending = Runnable { reopenPending = false }
@@ -73,6 +77,7 @@ class ShadeBlurService : AccessibilityService() {
         refreshWatched()
         Detector.clearNotice(this)
         announceState()
+        EventLog.add("detector connected")
     }
 
     /** Listen to System UI plus the protected apps (so they can trigger the automatic switch-off). */
@@ -91,6 +96,7 @@ class ShadeBlurService : AccessibilityService() {
             if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
                 Prefs.autoOff(this) && pkg in Prefs.protectedApps(this)
             ) {
+                EventLog.add("protected app opened: $pkg -> detector off")
                 Detector.turnOff(this, "Switched off for a protected app")
             }
             return
@@ -117,6 +123,7 @@ class ShadeBlurService : AccessibilityService() {
     }
 
     private fun cleanup() {
+        EventLog.add("detector stopped")
         main.removeCallbacksAndMessages(null)
         active = false
         reopenPending = false
@@ -143,6 +150,17 @@ class ShadeBlurService : AccessibilityService() {
         if (now < previewUntil) return
         val ignored = suppressed(now)
         val state = if (ignored) Sys.OTHER else classify()
+
+        // Log only changes, so the recorder stays short and readable.
+        if (state != lastState || ignored != lastIgnored) {
+            lastState = state
+            lastIgnored = ignored
+            EventLog.add(
+                "state=$state" + (if (ignored) " (ignored: $whyIgnored)" else "") +
+                    " qs=$qsOpen backdrop=${BackdropActivity.instance != null}"
+            )
+        }
+
         when {
             state == Sys.SHADE -> {
                 awaitingReopenUntil = 0L
@@ -154,6 +172,7 @@ class ShadeBlurService : AccessibilityService() {
                     // launch (e.g. empty notification list), so never re-open it later.
                     if (reopenPending && resumedAt > lastLaunch && now - resumedAt > SURVIVE_MS) {
                         reopenPending = false
+                        EventLog.add("shade survived the launch (no reopen)")
                     }
                 } else if (now - lastLaunch > LAUNCH_GAP_MS) {
                     // First try, or the last try did not produce a window: (re)start it.
@@ -166,6 +185,7 @@ class ShadeBlurService : AccessibilityService() {
             state == Sys.NONE && reopenPending -> {
                 reopenPending = false
                 awaitingReopenUntil = now + REOPEN_WAIT_MS
+                EventLog.add("shade collapsed after launch -> reopening it")
                 performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)   // bring the shade back over the backdrop
             }
             state == Sys.NONE && now < awaitingReopenUntil -> Unit  // waiting for the shade to come back
@@ -201,26 +221,38 @@ class ShadeBlurService : AccessibilityService() {
     /** Fade the backdrop out and remove it. */
     private fun release() {
         active = false
-        BackdropActivity.instance?.hideAndFinish()
+        val backdrop = BackdropActivity.instance ?: return
+        EventLog.add("release: glass fading out")
+        backdrop.hideAndFinish()
     }
 
     fun onBackdropResumed() {
         resumedAt = SystemClock.uptimeMillis()
+        EventLog.add("glass window ready ${resumedAt - lastLaunch} ms after launch")
         removeAnchor()
     }
 
     /** Screen off, lock screen, or the moments right after unlock: never show the blur. */
     private fun suppressed(now: Long): Boolean {
-        if (!power.isInteractive) return true
+        if (!power.isInteractive) {
+            whyIgnored = "screen off"
+            return true
+        }
         if (keyguard.isKeyguardLocked) {
             wasLocked = true
+            whyIgnored = "locked"
             return true
         }
         if (wasLocked) {
             wasLocked = false
             unlockedAt = now
         }
-        return now - unlockedAt < UNLOCK_GUARD_MS
+        if (now - unlockedAt < UNLOCK_GUARD_MS) {
+            whyIgnored = "unlock grace"
+            return true
+        }
+        whyIgnored = ""
+        return false
     }
 
     // ---------- System UI classification ----------
@@ -287,9 +319,11 @@ class ShadeBlurService : AccessibilityService() {
     }
 
     private fun launchBackdrop() {
-        lastLaunch = SystemClock.uptimeMillis()
+        val now = SystemClock.uptimeMillis()
+        val sincePrev = now - lastLaunch
+        lastLaunch = now
         addAnchor()
-        runCatching {
+        val ok = runCatching {
             startActivity(
                 Intent(this, BackdropActivity::class.java).addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -298,6 +332,10 @@ class ShadeBlurService : AccessibilityService() {
                 )
             )
         }
+        EventLog.add(
+            "launch glass (anchor=${anchor != null}, ${sincePrev} ms since previous launch)" +
+                (if (ok.isFailure) " FAILED: ${ok.exceptionOrNull()?.javaClass?.simpleName}" else "")
+        )
         main.postDelayed(dropAnchor, ANCHOR_TIMEOUT_MS)   // safety: never leave the anchor behind
     }
 
@@ -313,7 +351,7 @@ class ShadeBlurService : AccessibilityService() {
         }, 5100)
     }
 
-    /** Text dump of all windows, used to calibrate shade detection on the real phone. */
+    /** Windows now plus the flight recorder: what the detector sees, and what it did and when. */
     fun dumpWindows(): String {
         val r = Rect()
         val now = SystemClock.uptimeMillis()
@@ -328,6 +366,7 @@ class ShadeBlurService : AccessibilityService() {
                 .append("act=${w.isActive} foc=${w.isFocused} ")
                 .append("h=${r.height()} y=${r.top}\n")
         }
+        sb.append("\n--- flight recorder (newest last) ---\n").append(EventLog.dump())
         return sb.toString()
     }
 
